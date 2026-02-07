@@ -93,16 +93,75 @@ const authFetcher = async (url: string) => {
   return res.json();
 };
 
+const TeamList = ({ workspaceId }: { workspaceId: string | null }) => {
+  const { data: members } = useSWR(workspaceId ? `/api/workspace-members?workspaceId=${workspaceId}` : null, authFetcher);
+
+  if (!members) return <div className="text-sm text-muted-foreground">Loading team...</div>;
+  if (members.length === 0) return <div className="text-sm text-muted-foreground">No team members yet.</div>;
+
+  return (
+    <div className="space-y-4">
+      {members.slice(0, 5).map((m: any) => (
+        <div key={m.id} className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-xs font-bold">
+              {m.first_name[0]}{m.last_name[0]}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">{m.first_name} {m.last_name}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">{m.job_title || m.role}</p>
+                {/* Task Stats Pill */}
+                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  {m.completed_tasks}/{m.total_tasks} Tasks
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Equity Badge - Only visible if present */}
+          {m.equity !== undefined && m.equity !== null && (
+            <div className="text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded">
+              {m.equity}% Eq.
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const MilestoneList = ({ workspaceId }: { workspaceId: string | null }) => {
+  const { data: milestones } = useSWR(workspaceId ? `/api/milestones?workspaceId=${workspaceId}` : null, authFetcher);
+
+  if (!milestones) return <div className="text-sm text-muted-foreground">Loading milestones...</div>;
+  if (milestones.length === 0) return <div className="text-sm text-muted-foreground">No upcoming milestones.</div>;
+
+  return (
+    <div className="space-y-4">
+      {milestones.slice(0, 3).map((m: any) => (
+        <div key={m.id} className="border-l-2 border-primary pl-4 py-1">
+          <p className="text-sm font-medium text-foreground">{m.title}</p>
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-xs text-muted-foreground">{new Date(m.due_date).toLocaleDateString()}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${m.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+              }`}>
+              {m.status}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 function DashboardContent() {
   const { user } = useAuth();
   const router = useRouter();
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (user?.role === 'employee') {
-      router.push('/dashboard/employee');
-    }
-  }, [router, user?.role]);
+  // Employee redirect handled by ProtectedRoute wrapper
 
   // Mock workspaces - in production this would come from API
   // Replaced the static setWorkspaceId with dynamic workspace fetching and activeWorkspaceId logic
@@ -174,7 +233,7 @@ function DashboardContent() {
           className="mb-8"
         >
           <h1 className="text-4xl font-bold text-foreground mb-2">
-            Welcome back, {user?.first_name}! 👋
+            Welcome, Founder {user?.first_name}! 🚀
           </h1>
           <p className="text-muted-foreground">
             Here's what's happening with your team today
@@ -231,7 +290,7 @@ function DashboardContent() {
                   </div>
                   <div className="p-4">
                     <p className="text-sm text-muted-foreground mb-1">
-                      {stat.title}
+                      {stat.title} {index < 3 && <span className="text-[10px] bg-red-100 text-red-600 px-1 py-0.5 rounded ml-1">Private</span>}
                     </p>
                     <p className="text-3xl font-bold text-foreground">
                       {stat.value}
@@ -247,6 +306,27 @@ function DashboardContent() {
             );
           })}
         </motion.div>
+
+        {/* Core Team & Milestones */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* Core Team Widget */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-foreground">Core Team</h3>
+              <Button variant="outline" size="sm" className="h-8">Manage</Button>
+            </div>
+            <TeamList workspaceId={activeWorkspaceId} />
+          </Card>
+
+          {/* Milestones Widget */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-foreground">Next Milestones</h3>
+              <Button variant="outline" size="sm" className="h-8">View All</Button>
+            </div>
+            <MilestoneList workspaceId={activeWorkspaceId} />
+          </Card>
+        </div>
 
         {/* Charts Grid */}
         <motion.div
@@ -375,7 +455,7 @@ function DashboardContent() {
 
 export default function DashboardPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute requiredRole="admin">
       <DashboardContent />
     </ProtectedRoute>
   );

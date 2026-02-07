@@ -2,16 +2,23 @@
 
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import useSWR from 'swr';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { ProtectedRoute } from '@/components/protected-route';
 import { DashboardSidebar } from '@/components/dashboard-sidebar';
 import { useAuth } from '@/hooks/use-auth';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { AlertCircle, Users, ChevronDown, UserPlus, Loader2, Search } from 'lucide-react';
+import { AlertCircle, Users, ChevronDown, UserPlus, Loader2, Search, CheckCircle2, Clock, Circle, LayoutList, Calendar } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   Select,
   SelectContent,
@@ -19,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 type Workspace = { id: number; name: string };
 
@@ -26,7 +34,7 @@ type WorkspaceMember = {
   id: number;
   workspace_id: number;
   user_id: number;
-  role: 'admin' | 'manager' | 'member' | 'viewer'; // Keep for internal logic if needed, but display designation
+  role: 'admin' | 'manager' | 'member' | 'viewer';
   designation?: string;
   joined_at: string;
   email: string;
@@ -34,15 +42,8 @@ type WorkspaceMember = {
   last_name: string;
   avatar_url?: string;
   app_role: 'admin' | 'manager' | 'employee';
-};
-
-type UserSearchResult = {
-  id: number;
-  email: string;
-  first_name: string;
-  last_name: string;
-  avatar_url?: string;
-  role: 'admin' | 'manager' | 'employee';
+  completed_tasks?: number;
+  total_tasks?: number;
 };
 
 type CreatedEmployee = {
@@ -53,6 +54,18 @@ type CreatedEmployee = {
   role: 'employee';
   designation?: string;
   temporary_password: string;
+};
+
+type TaskDetail = {
+  id: number;
+  title: string;
+  description?: string;
+  status: string;
+  priority: string;
+  project_name: string;
+  workspace_name: string;
+  due_date?: string;
+  created_at: string;
 };
 
 const authFetcher = async (url: string) => {
@@ -67,6 +80,120 @@ const authFetcher = async (url: string) => {
     throw new Error(data.error || 'Request failed');
   }
   return res.json();
+};
+
+const EmployeeDetailsSheet = ({
+  member,
+  isOpen,
+  onClose
+}: {
+  member: WorkspaceMember | null,
+  isOpen: boolean,
+  onClose: () => void
+}) => {
+  const { data: tasks, isLoading } = useSWR<TaskDetail[]>(
+    member && isOpen ? `/api/tasks?assigned_to=${member.user_id}` : null,
+    authFetcher
+  );
+
+  const taskList = useMemo(() => tasks || [], [tasks]);
+
+  const stats = useMemo(() => {
+    return {
+      completed: taskList.filter(t => t.status === 'completed').length,
+      itemInProgress: taskList.filter(t => t.status === 'in_progress').length,
+      pending: taskList.filter(t => t.status === 'todo' || t.status === 'in_review').length,
+      total: taskList.length
+    };
+  }, [taskList]);
+
+  return (
+    <Sheet open={isOpen} onOpenChange={onClose}>
+      <SheetContent className="sm:max-w-xl w-full">
+        <SheetHeader className="mb-6">
+          <SheetTitle className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg font-bold">
+              {member?.first_name?.[0]}{member?.last_name?.[0]}
+            </div>
+            <div>
+              <p className="text-xl">{member?.first_name} {member?.last_name}</p>
+              <p className="text-sm font-normal text-muted-foreground">{member?.designation || 'Member'}</p>
+            </div>
+          </SheetTitle>
+          <SheetDescription>
+            Performance Overview & Task History
+          </SheetDescription>
+        </SheetHeader>
+
+        {member && (
+          <div className="space-y-6">
+            {/* Stats Grid */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-100 dark:border-green-800">
+                <p className="text-xs text-green-600 dark:text-green-400 font-medium mb-1">Completed</p>
+                <p className="text-2xl font-bold text-green-700 dark:text-green-300">{stats.completed}</p>
+              </div>
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800">
+                <p className="text-xs text-blue-600 dark:text-blue-400 font-medium mb-1">In Progress</p>
+                <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">{stats.itemInProgress}</p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-900/20 p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+                <p className="text-xs text-gray-600 dark:text-gray-400 font-medium mb-1">Total</p>
+                <p className="text-2xl font-bold text-gray-700 dark:text-gray-300">{stats.total}</p>
+              </div>
+            </div>
+
+            {/* Recent Tasks */}
+            <div>
+              <h3 className="font-semibold mb-3 flex items-center gap-2">
+                <LayoutList className="w-4 h-4" />
+                Task History
+              </h3>
+              <ScrollArea className="h-[400px] pr-4">
+                {isLoading ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+                    Loading tasks...
+                  </div>
+                ) : taskList.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground bg-secondary/50 rounded-lg">
+                    No tasks assigned yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {taskList.map((task) => (
+                      <div key={task.id} className="p-3 rounded-lg border border-border bg-card hover:bg-accent/5 transition-colors">
+                        <div className="flex items-start justify-between mb-2">
+                          <p className="font-medium text-sm line-clamp-1">{task.title}</p>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${task.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              task.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-700'
+                            }`}>
+                            {task.status.replace('_', ' ')}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                          {task.project_name && <span className="bg-secondary px-1.5 py-0.5 rounded">{task.project_name}</span>}
+                          {task.workspace_name && <span className="opacity-70">in {task.workspace_name}</span>}
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t border-border/50">
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            {new Date(task.created_at).toLocaleDateString()}
+                          </span>
+                          <span className="capitalize">{task.priority} Priority</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
 };
 
 function TeamContent() {
@@ -100,13 +227,6 @@ function TeamContent() {
   const { data, error, isLoading, mutate } = useSWR<WorkspaceMember[]>(membersKey, authFetcher);
   const members = useMemo(() => data || [], [data]);
 
-  const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [inviteQuery, setInviteQuery] = useState('');
-  const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(null);
-  const [inviteDesignation, setInviteDesignation] = useState('');
-  const [inviteError, setInviteError] = useState('');
-  const [isInviting, setIsInviting] = useState(false);
-
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCreatingEmployee, setIsCreatingEmployee] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -119,18 +239,7 @@ function TeamContent() {
     add_to_workspace: true,
   });
 
-  const userSearchKey =
-    activeWorkspaceId && inviteQuery.trim().length >= 2
-      ? `/api/users/search?q=${encodeURIComponent(inviteQuery.trim())}&workspaceId=${encodeURIComponent(activeWorkspaceId)}`
-      : null;
-
-  const {
-    data: searchResults,
-    error: searchError,
-    isLoading: searchLoading,
-  } = useSWR<UserSearchResult[]>(userSearchKey, authFetcher);
-
-  const results = useMemo(() => searchResults || [], [searchResults]);
+  const [selectedMember, setSelectedMember] = useState<WorkspaceMember | null>(null);
 
   const handleCreateEmployee = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -173,51 +282,6 @@ function TeamContent() {
     }
   };
 
-  const handleInvite = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setInviteError('');
-
-    if (!activeWorkspaceId) {
-      setInviteError('Select a workspace first');
-      return;
-    }
-    if (!selectedUser) {
-      setInviteError('Select a user');
-      return;
-    }
-
-    setIsInviting(true);
-    try {
-      const token = sessionStorage.getItem('auth_token');
-      const res = await fetch('/api/workspace-members', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          workspace_id: Number(activeWorkspaceId),
-          user_id: selectedUser.id,
-          role: 'member', // Hardcoded as per user request to remove role dropdown
-          designation: inviteDesignation,
-        }),
-      });
-
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || 'Failed to add member');
-
-      setIsInviteOpen(false);
-      setInviteQuery('');
-      setSelectedUser(null);
-      setInviteDesignation('');
-      await mutate();
-    } catch (err) {
-      setInviteError(err instanceof Error ? err.message : 'Failed to add member');
-    } finally {
-      setIsInviting(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-background">
       <DashboardSidebar />
@@ -230,7 +294,7 @@ function TeamContent() {
         >
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Team</h1>
-            <p className="text-muted-foreground">Workspace members and roles</p>
+            <p className="text-muted-foreground">Workspace members and performance</p>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
@@ -270,16 +334,17 @@ function TeamContent() {
                 }}
               >
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="bg-transparent gap-2">
+                  {/* CHANGED: Retained 'Create employee' functionality but renamed to 'Add member' and styled blue */}
+                  <Button className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
                     <UserPlus className="w-4 h-4" />
-                    Create employee
+                    Add member
                   </Button>
                 </DialogTrigger>
                 <DialogContent>
                   <DialogHeader>
-                    <DialogTitle>Create employee</DialogTitle>
+                    <DialogTitle>Add New Team Member</DialogTitle>
                     <DialogDescription>
-                      Create employee credentials and optionally add them to the selected workspace.
+                      Create credentials for a new employee and add them to the workspace.
                     </DialogDescription>
                   </DialogHeader>
 
@@ -341,7 +406,7 @@ function TeamContent() {
                       <div>
                         <p className="text-sm font-medium text-foreground">Add to this workspace</p>
                         <p className="text-xs text-muted-foreground">
-                          Adds the employee to the selected workspace immediately.
+                          Adds the member to the selected workspace immediately.
                         </p>
                       </div>
                       <button
@@ -359,20 +424,23 @@ function TeamContent() {
                     </div>
 
                     {createdEmployee && (
-                      <Card className="p-4">
-                        <p className="text-sm font-semibold text-foreground mb-2">Credentials</p>
+                      <Card className="p-4 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
+                        <p className="text-sm font-semibold text-green-800 dark:text-green-300 mb-2 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Member Added Successfully
+                        </p>
                         <div className="space-y-2">
                           <div>
                             <Label>Email</Label>
-                            <Input value={createdEmployee.email} readOnly />
+                            <Input value={createdEmployee.email} readOnly className="h-8" />
                           </div>
                           <div>
                             <Label>Temporary password</Label>
-                            <Input value={createdEmployee.temporary_password} readOnly />
+                            <Input value={createdEmployee.temporary_password} readOnly className="h-8 font-mono" />
                           </div>
                         </div>
                         <p className="text-xs text-muted-foreground mt-3">
-                          Share these credentials securely. The employee can login and change later.
+                          Share these credentials securely. They can login and change the password.
                         </p>
                       </Card>
                     )}
@@ -387,14 +455,14 @@ function TeamContent() {
                       >
                         Close
                       </Button>
-                      <Button type="submit" disabled={isCreatingEmployee} className="gap-2">
+                      <Button type="submit" disabled={isCreatingEmployee} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
                         {isCreatingEmployee ? (
                           <>
                             <Loader2 className="w-4 h-4 animate-spin" />
                             Creating...
                           </>
                         ) : (
-                          'Create'
+                          'Add Member'
                         )}
                       </Button>
                     </DialogFooter>
@@ -403,130 +471,7 @@ function TeamContent() {
               </Dialog>
             )}
 
-            <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-              <DialogTrigger asChild>
-                <Button className="gap-2 btn-hover-lift">
-                  <UserPlus className="w-4 h-4" />
-                  Invite member
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Invite member</DialogTitle>
-                  <DialogDescription>
-                    Search users and add them to this workspace with a designation.
-                  </DialogDescription>
-                </DialogHeader>
-
-                <form onSubmit={handleInvite} className="space-y-4">
-                  {(inviteError || searchError) && (
-                    <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-                      {inviteError || (searchError as Error).message}
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    <Label htmlFor="invite_search">Search users</Label>
-                    <div className="relative">
-                      <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                      <Input
-                        id="invite_search"
-                        value={inviteQuery}
-                        onChange={(e) => {
-                          setInviteQuery(e.target.value);
-                          setSelectedUser(null);
-                        }}
-                        placeholder="Type name or email..."
-                        className="pl-9"
-                        disabled={!activeWorkspaceId || isInviting}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Type at least 2 characters to search.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Pick user</Label>
-                    <Card className="p-2 max-h-56 overflow-auto">
-                      {searchLoading ? (
-                        <div className="p-4 text-center text-muted-foreground">
-                          <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
-                          Searching...
-                        </div>
-                      ) : results.length === 0 ? (
-                        <div className="p-4 text-center text-muted-foreground">
-                          No users found
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          {results.map((u) => {
-                            const isSelected = selectedUser?.id === u.id;
-                            return (
-                              <button
-                                type="button"
-                                key={u.id}
-                                onClick={() => setSelectedUser(u)}
-                                className={`w-full text-left px-3 py-2 rounded-lg transition-smooth ${isSelected ? 'bg-primary text-white' : 'hover:bg-secondary'
-                                  }`}
-                              >
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold truncate">
-                                      {u.first_name} {u.last_name}
-                                    </p>
-                                    <p className={`text-xs truncate ${isSelected ? 'text-white/80' : 'text-muted-foreground'}`}>
-                                      {u.email}
-                                    </p>
-                                  </div>
-                                  <span className={`text-xs font-semibold px-2 py-1 rounded-md ${isSelected ? 'bg-white/20' : 'bg-secondary'
-                                    }`}>
-                                    {u.role}
-                                  </span>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </Card>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="invite_designation">Designation</Label>
-                    <Input
-                      id="invite_designation"
-                      value={inviteDesignation}
-                      onChange={(e) => setInviteDesignation(e.target.value)}
-                      placeholder="e.g. Project Manager"
-                      required
-                    />
-                  </div>
-
-                  <DialogFooter>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="bg-transparent"
-                      onClick={() => setIsInviteOpen(false)}
-                      disabled={isInviting}
-                    >
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={isInviting || !selectedUser} className="gap-2">
-                      {isInviting ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Adding...
-                        </>
-                      ) : (
-                        'Add member'
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
+            {/* REMOVED: Invite member dialog as requested */}
           </div>
         </motion.div>
 
@@ -563,10 +508,18 @@ function TeamContent() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.05 }}
                 whileHover={{ y: -4 }}
+                onClick={() => setSelectedMember(m)}
+                className="cursor-pointer"
               >
-                <Card className="p-6 hover:shadow-lg transition-smooth">
+                <Card className="p-6 hover:shadow-lg transition-smooth border-transparent hover:border-primary/20 relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 p-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="bg-primary/10 text-primary text-[10px] uppercase font-bold px-2 py-1 rounded">
+                      View Details
+                    </div>
+                  </div>
+
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white text-lg font-bold">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white text-lg font-bold shadow-lg shadow-primary/20">
                       {m.first_name?.charAt(0)}
                       {m.last_name?.charAt(0)}
                     </div>
@@ -582,8 +535,21 @@ function TeamContent() {
                     <span className="text-xs font-semibold px-2 py-1 rounded-md bg-secondary text-foreground capitalize">
                       {m.designation || 'Member'}
                     </span>
-                    <span className="text-xs text-muted-foreground">
-                      Joined {new Date(m.joined_at).toLocaleDateString()}
+
+                    {/* Activity Indicator (Example) */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                      <span className="text-xs text-muted-foreground">Active</span>
+                    </div>
+                  </div>
+
+                  {/* Minified Stats */}
+                  <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
+                    <span>
+                      <span className="font-bold text-foreground">{m.completed_tasks || 0}</span> Completed
+                    </span>
+                    <span>
+                      <span className="font-bold text-foreground">{m.total_tasks || 0}</span> Total
                     </span>
                   </div>
                 </Card>
@@ -591,6 +557,12 @@ function TeamContent() {
             ))}
           </motion.div>
         )}
+
+        <EmployeeDetailsSheet
+          member={selectedMember}
+          isOpen={!!selectedMember}
+          onClose={() => setSelectedMember(null)}
+        />
       </main>
     </div>
   );

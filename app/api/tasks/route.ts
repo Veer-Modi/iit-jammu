@@ -40,6 +40,12 @@ export async function GET(req: NextRequest) {
       params.push(status);
     }
 
+    const assignedTo = searchParams.get('assigned_to');
+    if (assignedTo) {
+      sql += ' AND t.assigned_to = ?';
+      params.push(assignedTo);
+    }
+
     sql += ' ORDER BY t.created_at DESC';
 
     const tasks = await query(sql, params);

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
+import useSWR from 'swr';
 import {
   LayoutDashboard,
   Building2,
@@ -17,6 +18,7 @@ import {
   Menu,
   X,
 } from 'lucide-react';
+import { io as ClientIO } from 'socket.io-client';
 import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -87,18 +89,44 @@ export function DashboardSidebar() {
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 768px)');
-
     const update = () => {
       setIsDesktop(media.matches);
       if (media.matches) {
         setIsOpen(true);
       }
     };
-
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
+
+  // Fetch unread count for Chat
+  const fetcher = (url: string) => {
+    const token = localStorage.getItem('auth_token');
+    return fetch(url, { headers: { Authorization: `Bearer ${token}` } }).then(res => res.json());
+  };
+  const { data: unreadData, mutate: mutateUnread } = useSWR('/api/chat/unread-count', fetcher, { refreshInterval: 5000 });
+  const unreadCount = unreadData?.total_unread || 0;
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const socket = ClientIO(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000', {
+      path: '/api/socket/io',
+      addTrailingSlash: false,
+    });
+
+    socket.on('connect', () => {
+      socket.emit('join-user', user.id);
+    });
+
+    socket.on('notification', () => {
+      mutateUnread();
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user?.id, mutateUnread]);
 
   const filteredItems = navigationItems.filter(
     (item) => !user || item.roles.includes(user.role)
@@ -130,9 +158,8 @@ export function DashboardSidebar() {
       </AnimatePresence>
 
       <aside
-        className={`fixed left-0 top-0 h-screen w-64 bg-card border-r border-border p-6 flex flex-col z-40 transition-transform duration-300 ${
-          isDesktop || isOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        className={`fixed left-0 top-0 h-screen w-64 bg-card border-r border-border p-6 flex flex-col z-40 transition-transform duration-300 ${isDesktop || isOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
       >
         {/* Logo */}
         <motion.div
@@ -147,13 +174,16 @@ export function DashboardSidebar() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground">TaskFlow</h1>
-              <p className="text-xs text-muted-foreground">Team Edition</p>
+              <p className="text-xs text-muted-foreground">
+                {user?.role === 'admin' ? 'Founder Workspace' : 'Employee Workspace'}
+              </p>
             </div>
           </Link>
         </motion.div>
 
         {/* Navigation */}
         <nav className="flex-1 space-y-2">
+
           {filteredItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
@@ -168,11 +198,10 @@ export function DashboardSidebar() {
                 <Link
                   href={item.href}
                   onClick={() => setIsOpen(false)}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-smooth group relative overflow-hidden ${
-                    isActive
-                      ? 'bg-primary text-white shadow-lg'
-                      : 'text-foreground hover:bg-secondary'
-                  }`}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-smooth group relative overflow-hidden ${isActive
+                    ? 'bg-primary text-white shadow-lg'
+                    : 'text-foreground hover:bg-secondary'
+                    }`}
                 >
                   {/* Background glow on active */}
                   {isActive && (
@@ -183,7 +212,15 @@ export function DashboardSidebar() {
                     ></motion.div>
                   )}
 
-                  <Icon className={`w-5 h-5 ${isActive ? 'animate-bounce' : ''}`} />
+                  <div className="relative">
+                    <Icon className={`w-5 h-5 ${isActive ? 'animate-bounce' : ''}`} />
+                    {/* Chat Unread Badge */}
+                    {item.label === 'Chat' && unreadCount > 0 && (
+                      <span className="absolute -top-2 -right-2 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white ring-2 ring-card">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
+                    )}
+                  </div>
                   <span className="font-medium">{item.label}</span>
                 </Link>
               </motion.div>

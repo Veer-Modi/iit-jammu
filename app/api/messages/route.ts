@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
-
-const getAuthToken = (req: NextRequest): string | null => {
-  const authHeader = req.headers.get('authorization');
-  return authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-};
+import { verifyToken, getAuthToken } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
   try {
@@ -54,7 +49,7 @@ export async function GET(req: NextRequest) {
       [roomId, limit, offset]
     );
 
-    return NextResponse.json(messages.reverse(), { status: 200 });
+    return NextResponse.json((messages as any[]).reverse(), { status: 200 });
   } catch (error) {
     console.error('Fetch messages error:', error);
     return NextResponse.json(
@@ -108,6 +103,24 @@ export async function POST(req: NextRequest) {
     const insertResult = result as any;
     const messageId = insertResult.insertId;
 
+    // Increment unread count for other members
+    // 1. Get all members of the room
+    const members = await query(
+      'SELECT user_id FROM chat_room_members WHERE room_id = ?',
+      [room_id]
+    );
+
+    // 2. Loop and upsert notifications (could be optimized with a single query but loop is safer for logic)
+    // Optimization: INSERT INTO ... SELECT ...
+    await query(
+      `INSERT INTO chat_notifications (user_id, room_id, unread_count)
+         SELECT user_id, ?, 1
+         FROM chat_room_members
+         WHERE room_id = ? AND user_id != ?
+         ON DUPLICATE KEY UPDATE unread_count = unread_count + 1, updated_at = CURRENT_TIMESTAMP`,
+      [room_id, room_id, payload.id]
+    );
+
     // Fetch created message with user details
     const messages = await query(
       `SELECT m.*, u.first_name, u.last_name, u.avatar_url
@@ -120,7 +133,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         message: 'Message sent successfully',
-        data: messages[0],
+        data: (messages as any[])[0],
       },
       { status: 201 }
     );
@@ -130,5 +143,64 @@ export async function POST(req: NextRequest) {
       { error: 'Failed to send message' },
       { status: 500 }
     );
+  }
+}
+
+export async function PUT(req: NextRequest) {
+  try {
+    const token = getAuthToken(req);
+    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const payload = verifyToken(token);
+    if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+
+    const body = await req.json();
+    const { id, content } = body;
+
+    // Verify ownership
+    const existing = await query('SELECT sender_id, room_id FROM messages WHERE id = ?', [id]);
+    if (!Array.isArray(existing) || existing.length === 0) {
+      return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+    }
+    const msg = (existing as any[])[0];
+    if (msg.sender_id !== payload.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    await query('UPDATE messages SET content = ?, is_edited = TRUE, edited_at = CURRENT_TIMESTAMP WHERE id = ?', [content, id]);
+
+    // Fetch updated
+    const updated = await query('SELECT * FROM messages WHERE id = ?', [id]);
+
+    return NextResponse.json((updated as any[])[0]);
+  } catch (error) {
+    return NextResponse.json({ error: 'Failed to update' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const token = getAuthToken(req);
+    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const payload = verifyToken(token);
+    if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+
+    // Verify ownership
+    const existing = await query('SELECT sender_id, room_id FROM messages WHERE id = ?', [id]);
+    if (!Array.isArray(existing) || existing.length === 0) {
+      return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+    }
+    const msg = (existing as any[])[0];
+    if (msg.sender_id !== payload.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    await query('DELETE FROM messages WHERE id = ?', [id]);
+
+    return NextResponse.json({ success: true, id, room_id: msg.room_id });
+  } catch (error) {
+    return NextResponse.json({ error: 'Failed to delete' }, { status: 500 });
   }
 }

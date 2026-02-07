@@ -8,10 +8,12 @@ import { DashboardSidebar } from '@/components/dashboard-sidebar';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Plus, Search, MoreVertical, Smile, Loader2, AlertCircle, ChevronDown } from 'lucide-react';
+import { Send, Plus, Search, MoreVertical, Smile, Loader2, AlertCircle, ChevronDown, X, Edit2, Trash2, Reply as ReplyIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import EmojiPicker, { Theme } from 'emoji-picker-react';
+import { io as ClientIO } from 'socket.io-client';
 import {
   Select,
   SelectContent,
@@ -40,11 +42,17 @@ interface RoomMember {
 interface Message {
   id: number;
   sender_id: number;
+  room_id?: number;
   content: string;
   created_at: string;
   first_name?: string;
   last_name?: string;
   avatar_url?: string;
+  reply_to_id?: number | null;
+  is_edited?: boolean;
+  reactions?: any;
+  attachment_url?: string;
+  message_type?: 'text' | 'image' | 'file' | 'system';
 }
 
 type Workspace = { id: number; name: string };
@@ -68,15 +76,17 @@ function ChatContent() {
   const { data: workspaces } = useSWR<Workspace[]>('/api/workspaces', authFetcher);
   const workspaceList = useMemo(() => workspaces || [], [workspaces]);
 
+
+
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
+  const [socket, setSocket] = useState<any>(null);
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('active_workspace_id');
     if (stored) {
       setActiveWorkspaceId(stored);
-      return;
-    }
-    if (workspaceList.length > 0) {
+    } else if (workspaceList.length > 0) {
       setActiveWorkspaceId(String(workspaceList[0].id));
     }
   }, [workspaceList]);
@@ -85,7 +95,10 @@ function ChatContent() {
     if (activeWorkspaceId) localStorage.setItem('active_workspace_id', activeWorkspaceId);
   }, [activeWorkspaceId]);
 
-  const roomsKey = activeWorkspaceId ? `/api/chat-rooms?workspaceId=${activeWorkspaceId}` : null;
+
+
+  // Fetch global rooms
+  const roomsKey = '/api/chat-rooms?workspaceId=1'; // Defaulting to 1 for now or just generic if API handles it
   const {
     data: rooms,
     error: roomsError,
@@ -97,14 +110,49 @@ function ChatContent() {
   const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
 
   useEffect(() => {
+    // Auto-select General if nothing selected
     if (selectedRoomId) return;
-    if (roomList.length > 0) setSelectedRoomId(roomList[0].id);
+    if (roomList.length > 0) {
+      const general = roomList.find(r => r.name === 'General');
+      if (general) setSelectedRoomId(general.id);
+      else setSelectedRoomId(roomList[0].id);
+    }
   }, [roomList, selectedRoomId]);
 
   const selectedRoom = useMemo(
     () => roomList.find((r) => r.id === selectedRoomId) || null,
     [roomList, selectedRoomId]
   );
+
+  // Socket Init
+  useEffect(() => {
+    const socketInstance = ClientIO(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000', {
+      path: '/api/socket/io',
+      addTrailingSlash: false,
+    });
+
+    socketInstance.on('connect', () => {
+      setIsConnected(true);
+      if (user?.id) socketInstance.emit('join-user', user.id);
+    });
+
+    socketInstance.on('disconnect', () => setIsConnected(false));
+
+    setSocket(socketInstance);
+
+    return () => {
+      socketInstance.disconnect();
+    };
+  }, [user?.id]);
+
+  // Join Room
+  useEffect(() => {
+    if (!socket || !selectedRoomId) return;
+    socket.emit('join-room', selectedRoomId);
+    return () => {
+      socket.emit('leave-room', selectedRoomId);
+    };
+  }, [socket, selectedRoomId]);
 
   const messagesKey = selectedRoomId ? `/api/messages?roomId=${selectedRoomId}&limit=100` : null;
   const {
@@ -119,18 +167,18 @@ function ChatContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false);
-  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
-  const [createRoomError, setCreateRoomError] = useState('');
-  const [createRoomForm, setCreateRoomForm] = useState<{
-    name: string;
-    type: 'direct' | 'group' | 'channel';
-    description: string;
-  }>({
-    name: '',
-    type: 'channel',
-    description: '',
-  });
+  // const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false);
+  // const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  // const [createRoomError, setCreateRoomError] = useState('');
+  // const [createRoomForm, setCreateRoomForm] = useState<{
+  //   name: string;
+  //   type: 'direct' | 'group' | 'channel';
+  //   description: string;
+  // }>({
+  //   name: '',
+  //   type: 'channel',
+  //   description: '',
+  // });
 
   const [isMembersDialogOpen, setIsMembersDialogOpen] = useState(false);
   const [isUpdatingMembers, setIsUpdatingMembers] = useState(false);
@@ -146,13 +194,90 @@ function ChatContent() {
     mutate: mutateMembers,
   } = useSWR<RoomMember[]>(membersKey, authFetcher);
 
+  // New State for Advanced Features
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Socket Events
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleTyping = (data: { roomId: number; user: string; isTyping: boolean }) => {
+      if (Number(data.roomId) !== Number(selectedRoomId)) return;
+      setTypingUsers(prev => {
+        const next = new Set(prev);
+        if (data.isTyping) next.add(data.user);
+        else next.delete(data.user);
+        return next;
+      });
+    };
+
+    const handleMessageUpdated = (updatedMsg: Message) => {
+      if (updatedMsg.room_id && Number(updatedMsg.room_id) !== Number(selectedRoomId)) return;
+      mutateMessages(current => current?.map(m => m.id === updatedMsg.id ? { ...m, ...updatedMsg } : m), { revalidate: false });
+    };
+
+    const handleMessageDeleted = (data: { id: number; room_id: number }) => {
+      if (data.room_id && Number(data.room_id) !== Number(selectedRoomId)) return;
+      mutateMessages(current => current?.filter(m => m.id !== data.id), { revalidate: false });
+    };
+
+    socket.on('typing', handleTyping);
+    socket.on('message-updated', handleMessageUpdated);
+    socket.on('message-deleted', handleMessageDeleted);
+
+    return () => {
+      socket.off('typing', handleTyping);
+      socket.off('message-updated', handleMessageUpdated);
+      socket.off('message-deleted', handleMessageDeleted);
+    };
+  }, [socket, selectedRoomId, mutateMessages]);
+
+  const handleTypingInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMessageInput(e.target.value);
+
+    if (!socket || !selectedRoomId || !user) return;
+
+    socket.emit('typing', { roomId: selectedRoomId, user: user.first_name, isTyping: true });
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('typing', { roomId: selectedRoomId, user: user.first_name, isTyping: false });
+    }, 2000);
+  };
+
+  // Mark as read when room opens or changes
+  useEffect(() => {
+    if (!selectedRoomId) return;
+
+    const markRead = async () => {
+      try {
+        const token = localStorage.getItem('auth_token');
+        await fetch('/api/chat/read', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ room_id: selectedRoomId })
+        });
+        // Optionally revalidate sidebar count here if context available, 
+        // but sidebar polls every 5s so it will update automatically.
+      } catch (err) {
+        console.error('Failed to mark read:', err);
+      }
+    };
+
+    markRead();
+    scrollToBottom();
+  }, [selectedRoomId, messageList.length]); // Also mark read when new messages arrive while open? Yes.
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messageList.length]);
 
   const handleSearchUsersForRoom = async () => {
     if (!activeWorkspaceId || !memberSearch.trim()) return;
@@ -224,6 +349,30 @@ function ChatContent() {
     }
   };
 
+  const handleEmojiClick = (emojiData: any) => {
+    setMessageInput(prev => prev + emojiData.emoji);
+    setShowEmojiPicker(false);
+  };
+
+  const handleDeleteMessage = async (messageId: number) => {
+    if (!confirm('Are you sure you want to delete this message?')) return;
+    try {
+      const token = localStorage.getItem('auth_token');
+      await fetch(`/api/messages?id=${messageId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      mutateMessages(current => current?.filter(m => m.id !== messageId), { revalidate: false });
+      // Socket emit handled by API or we can emit here too for faster UI
+      if (socket && selectedRoomId) {
+        socket.emit('delete-message', { id: messageId, room_id: selectedRoomId });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleSendMessage = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -231,6 +380,32 @@ function ChatContent() {
     if (!selectedRoomId) return;
 
     const token = localStorage.getItem('auth_token');
+
+    // Handle Edit
+    if (editingMessage) {
+      try {
+        await fetch('/api/messages', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ id: editingMessage.id, content: messageInput })
+        });
+
+        // Optimistic update
+        mutateMessages(current => current?.map(m => m.id === editingMessage.id ? { ...m, content: messageInput, is_edited: true } : m), { revalidate: false });
+
+        if (socket) {
+          socket.emit('edit-message', { ...editingMessage, content: messageInput, is_edited: true, room_id: selectedRoomId });
+        }
+
+        setEditingMessage(null);
+        setMessageInput('');
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
+    // Handle New Message
     const optimistic: Message = {
       id: Date.now(),
       sender_id: user?.id || 0,
@@ -239,9 +414,11 @@ function ChatContent() {
       first_name: user?.first_name,
       last_name: user?.last_name,
       avatar_url: user?.avatar_url,
+      reply_to_id: replyTo?.id || null,
     };
 
     setMessageInput('');
+    setReplyTo(null);
     await mutateMessages(async (current) => [...(current || []), optimistic], { revalidate: false });
 
     try {
@@ -254,11 +431,27 @@ function ChatContent() {
         body: JSON.stringify({
           room_id: selectedRoomId,
           content: optimistic.content,
+          reply_to_id: optimistic.reply_to_id,
         }),
       });
 
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to send message');
+
+      if (socket) {
+        socket.emit('send-message', {
+          ...optimistic,
+          id: payload.id || optimistic.id, // Use real ID if available
+          room_id: selectedRoomId,
+        });
+
+        // Notify other members (for sidebar unread count)
+        roomMembers?.forEach((m) => {
+          if (m.user_id !== user?.id) {
+            socket.emit('notify-user', { userId: m.user_id, roomId: selectedRoomId });
+          }
+        });
+      }
 
       await mutateMessages();
     } catch (err) {
@@ -267,17 +460,24 @@ function ChatContent() {
     }
   };
 
-  const handleCreateRoom = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setCreateRoomError('');
-    if (!activeWorkspaceId) {
-      setCreateRoomError('Select a workspace first');
+  const { data: chatUsers, error: chatUsersError, isLoading: chatUsersLoading } = useSWR('/api/chat-users', authFetcher);
+
+  const handleUserClick = async (targetUser: any) => {
+    // 1. Check if we already have a DM with this user
+    // Note: This check is purely client-side based on room name convention or description protocol
+    // Ideally backend returns "dm_partner_id" but for now we look for room type 'direct' and description === targetUser.id
+    const existingRoom = roomList.find(r => r.type === 'direct' && (r.description === String(targetUser.id) || r.name === `${targetUser.first_name} ${targetUser.last_name}`));
+
+    if (existingRoom) {
+      setSelectedRoomId(existingRoom.id);
       return;
     }
 
-    setIsCreatingRoom(true);
+    // 2. Create new DM room
     try {
       const token = localStorage.getItem('auth_token');
+      // setIsCreatingRoom(true); 
+
       const res = await fetch('/api/chat-rooms', {
         method: 'POST',
         headers: {
@@ -285,25 +485,79 @@ function ChatContent() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          workspace_id: Number(activeWorkspaceId),
-          name: createRoomForm.name,
-          type: createRoomForm.type,
-          description: createRoomForm.description || null,
+
+          name: `${targetUser.first_name} ${targetUser.last_name}`,
+          type: 'direct',
+          description: String(targetUser.id),
+          member_ids: [targetUser.id],
+          workspace_id: activeWorkspaceId ? Number(activeWorkspaceId) : 1,
         }),
       });
+      const data = await res.json();
+      if (data.roomId) {
+        await mutateRooms();
+        setSelectedRoomId(data.roomId);
+      }
+    } catch (e) { console.error(e); }
 
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || 'Failed to create room');
+  };
 
-      setIsCreateRoomOpen(false);
-      setCreateRoomForm({ name: '', type: 'channel', description: '' });
 
-      await mutateRooms();
-      if (payload.roomId) setSelectedRoomId(payload.roomId);
+
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0] || !selectedRoomId) return;
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', e.target.files[0]);
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      // Send message with attachment
+      const token = localStorage.getItem('auth_token');
+      const isImage = e.target.files[0].type.startsWith('image/');
+      const optimistic: Message = {
+        id: Date.now(),
+        sender_id: user?.id || 0,
+        content: isImage ? 'Sent an image' : 'Sent a file',
+        created_at: new Date().toISOString(),
+        first_name: user?.first_name,
+        last_name: user?.last_name,
+        avatar_url: user?.avatar_url,
+        attachment_url: data.url,
+        message_type: isImage ? 'image' : 'file',
+      };
+
+      await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          room_id: selectedRoomId,
+          content: optimistic.content,
+          attachment_url: data.url,
+          message_type: optimistic.message_type
+        })
+      });
+
+      // Socket emit
+      if (socket) {
+        socket.emit('send-message', { ...optimistic, room_id: selectedRoomId });
+      }
+      mutateMessages();
     } catch (err) {
-      setCreateRoomError(err instanceof Error ? err.message : 'Failed to create room');
+      console.error('Upload failed', err);
+      alert('Failed to upload file');
     } finally {
-      setIsCreatingRoom(false);
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -326,123 +580,9 @@ function ChatContent() {
           <div className="p-6 border-b border-border">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold text-foreground">Messages</h2>
-              <Dialog open={isCreateRoomOpen} onOpenChange={setIsCreateRoomOpen}>
-                <DialogTrigger asChild>
-                  <Button size="sm" variant="ghost">
-                    <Plus className="w-4 h-4" />
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create chat room</DialogTitle>
-                    <DialogDescription>
-                      Create a new channel or group in this workspace.
-                    </DialogDescription>
-                  </DialogHeader>
-
-                  <form onSubmit={handleCreateRoom} className="space-y-4">
-                    {createRoomError && (
-                      <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-                        {createRoomError}
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <Label htmlFor="room_name">Room name</Label>
-                      <Input
-                        id="room_name"
-                        value={createRoomForm.name}
-                        onChange={(e) =>
-                          setCreateRoomForm((s) => ({ ...s, name: e.target.value }))
-                        }
-                        placeholder="e.g. General"
-                        required
-                        disabled={isCreatingRoom}
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Type</Label>
-                      <Select
-                        value={createRoomForm.type}
-                        onValueChange={(value) =>
-                          setCreateRoomForm((s) => ({
-                            ...s,
-                            type: value as 'direct' | 'group' | 'channel',
-                          }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="channel">Channel</SelectItem>
-                          <SelectItem value="group">Group</SelectItem>
-                          <SelectItem value="direct">Direct</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="room_desc">Description (optional)</Label>
-                      <textarea
-                        id="room_desc"
-                        value={createRoomForm.description}
-                        onChange={(e) =>
-                          setCreateRoomForm((s) => ({
-                            ...s,
-                            description: e.target.value,
-                          }))
-                        }
-                        rows={3}
-                        disabled={isCreatingRoom}
-                        className="w-full px-3 py-2 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary bg-background text-foreground transition-smooth"
-                        placeholder="Short description"
-                      />
-                    </div>
-
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="bg-transparent"
-                        onClick={() => setIsCreateRoomOpen(false)}
-                        disabled={isCreatingRoom}
-                      >
-                        Cancel
-                      </Button>
-                      <Button type="submit" disabled={isCreatingRoom} className="gap-2">
-                        {isCreatingRoom ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Creating...
-                          </>
-                        ) : (
-                          'Create'
-                        )}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
             </div>
 
-            {/* Workspace */}
-            <div className="relative mb-4">
-              <select
-                value={activeWorkspaceId}
-                onChange={(e) => setActiveWorkspaceId(e.target.value)}
-                className="w-full h-9 pl-3 pr-10 rounded-lg border border-input bg-background text-foreground text-sm"
-                disabled={workspaceList.length === 0}
-              >
-                {workspaceList.map((w) => (
-                  <option key={w.id} value={String(w.id)}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-4 h-4 text-muted-foreground absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
+
 
             {/* Search */}
             <div className="relative">
@@ -481,9 +621,8 @@ function ChatContent() {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.05 }}
                     onClick={() => setSelectedRoomId(room.id)}
-                    className={`w-full text-left p-4 border-b border-border hover:bg-secondary transition-colors ${
-                      selectedRoomId === room.id ? 'bg-primary/10' : ''
-                    }`}
+                    className={`w-full text-left p-4 border-b border-border hover:bg-secondary transition-colors ${selectedRoomId === room.id ? 'bg-primary/10' : ''
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-12 h-12 bg-gradient-to-br from-primary/50 to-accent/50 rounded-full flex items-center justify-center text-2xl flex-shrink-0">
@@ -494,26 +633,59 @@ function ChatContent() {
                           {room.name}
                         </h3>
                         <p className="text-xs text-muted-foreground capitalize">
-                          {room.type === 'channel' ? '#' : ''}
-                          {room.type}
                         </p>
                       </div>
                     </div>
+
                   </motion.button>
                 ))
               )}
             </AnimatePresence>
+
+            {/* Users List (Direct Messages) */}
+            <div className="mt-6 px-6 pb-2">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                Direct Messages
+              </h3>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-1">
+              {chatUsersLoading ? (
+                <div className="text-center text-xs text-muted-foreground py-2">Loading users...</div>
+              ) : chatUsers?.length === 0 ? (
+                <div className="text-center text-xs text-muted-foreground py-2">No other users found</div>
+              ) : (
+                chatUsers?.filter((u: any) => u.id !== user?.id).map((u: any) => (
+                  <button
+                    key={u.id}
+                    onClick={() => handleUserClick(u)}
+                    className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors text-left group"
+                  >
+                    <div className="relative">
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary">
+                        {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full rounded-full object-cover" /> : u.first_name?.[0]}
+                      </div>
+                      <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-background ${u.is_active ? 'bg-green-500' : 'bg-gray-300'}`}></span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate group-hover:text-primary transition-colors">{u.first_name} {u.last_name}</div>
+                      <div className="text-[10px] text-muted-foreground truncate">{u.role}</div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+
           </div>
         </motion.div>
 
         {/* Chat Area */}
-        <motion.div
+        < motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="flex-1 flex flex-col"
         >
           {/* Chat Header */}
-          <div className="bg-card border-b border-border p-6 flex justify-between items-center">
+          < div className="bg-card border-b border-border p-6 flex justify-between items-center" >
             <div>
               <h3 className="text-lg font-bold text-foreground">
                 {selectedRoom?.name || 'Select a room'}
@@ -526,7 +698,7 @@ function ChatContent() {
                 {selectedRoomId && (
                   <Dialog open={isMembersDialogOpen} onOpenChange={setIsMembersDialogOpen}>
                     <DialogTrigger asChild>
-                      <Button variant="outline" size="xs" className="h-7 px-2 text-xs">
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs">
                         Members
                         {Array.isArray(roomMembers) && roomMembers.length > 0 && (
                           <span className="ml-1 inline-flex items-center justify-center rounded-full bg-secondary px-1.5 text-[10px]">
@@ -583,7 +755,7 @@ function ChatContent() {
                                     {!isSelf && (
                                       <Button
                                         variant="ghost"
-                                        size="xs"
+                                        size="sm"
                                         disabled={isUpdatingMembers}
                                         onClick={() => handleRemoveMember(m.user_id)}
                                         className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
@@ -611,7 +783,7 @@ function ChatContent() {
                             />
                             <Button
                               type="button"
-                              size="xs"
+                              size="sm"
                               variant="secondary"
                               disabled={isUpdatingMembers || !memberSearch.trim()}
                               onClick={handleSearchUsersForRoom}
@@ -640,7 +812,7 @@ function ChatContent() {
                                     </div>
                                     <Button
                                       type="button"
-                                      size="xs"
+                                      size="sm"
                                       disabled={isUpdatingMembers || alreadyMember}
                                       onClick={() => handleAddMember(u.id)}
                                       className="h-7 px-2 text-[11px]"
@@ -673,127 +845,221 @@ function ChatContent() {
             <Button variant="ghost" size="sm">
               <MoreVertical className="w-4 h-4" />
             </Button>
-          </div>
+          </div >
 
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
-            <AnimatePresence>
-              {messagesLoading ? (
-                <div className="text-center text-muted-foreground py-8">
-                  <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
-                  Loading messages...
-                </div>
-              ) : messagesError ? (
-                <div className="text-center text-muted-foreground py-8">
-                  <AlertCircle className="w-6 h-6 mx-auto mb-2 opacity-60" />
-                  {(messagesError as Error).message}
-                </div>
-              ) : !selectedRoomId ? (
-                <div className="text-center text-muted-foreground py-8">
-                  Select a room to start chatting
-                </div>
-              ) : messageList.length === 0 ? (
-                <div className="text-center text-muted-foreground py-8">
-                  No messages yet. Say hi.
-                </div>
-              ) : (
-                messageList.map((msg, index) => {
-                  const isMine = msg.sender_id === user?.id;
-                  const senderName =
-                    msg.first_name || msg.last_name
-                      ? `${msg.first_name || ''} ${msg.last_name || ''}`.trim()
-                      : 'Unknown';
-
-                  return (
-                    <motion.div
-                      key={msg.id}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.02 }}
-                      className={`flex gap-3 ${isMine ? 'justify-end' : 'justify-start'}`}
-                    >
-                      {!isMine && (
-                        <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center flex-shrink-0 text-xs font-bold">
-                          {(msg.first_name?.charAt(0) || 'U') + (msg.last_name?.charAt(0) || '')}
-                        </div>
-                      )}
-
-                      <div className={`max-w-xs lg:max-w-md ${isMine ? 'order-2' : 'order-1'}`}>
-                        {!isMine && (
-                          <p className="text-xs font-semibold text-muted-foreground mb-1">
-                            {senderName}
-                          </p>
-                        )}
-
-                        <motion.div
-                          whileHover={{ scale: 1.02 }}
-                          className={`px-4 py-3 rounded-2xl transition-smooth ${
-                            isMine
-                              ? 'bg-primary text-white rounded-br-none'
-                              : 'bg-secondary text-foreground rounded-bl-none'
-                          }`}
-                        >
-                          <p className="break-words text-sm">{msg.content}</p>
-                        </motion.div>
-
-                        <p className="text-xs text-muted-foreground mt-1 px-2">
-                          {new Date(msg.created_at).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </p>
+          {
+            selectedRoomId ? (
+              <>
+                {/* Messages */}
+                < div className="flex-1 overflow-y-auto p-6 space-y-4" >
+                  <AnimatePresence>
+                    {messagesLoading ? (
+                      <div className="text-center text-muted-foreground py-8">
+                        <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
+                        Loading messages...
                       </div>
+                    ) : messagesError ? (
+                      <div className="text-center text-muted-foreground py-8">
+                        <AlertCircle className="w-6 h-6 mx-auto mb-2 opacity-60" />
+                        {(messagesError as Error).message}
+                      </div>
+                    ) : messageList.length === 0 ? (
+                      <div className="text-center text-muted-foreground py-8">
+                        No messages yet. Start the conversation!
+                      </div>
+                    ) : (
+                      messageList.map((msg, index) => {
+                        const isMine = Number(msg.sender_id) === Number(user?.id);
+                        const senderName = `${msg.first_name || 'User'} ${msg.last_name || ''}`;
+                        const parentMsg = msg.reply_to_id
+                          ? messageList.find((m) => m.id === msg.reply_to_id)
+                          : null;
 
-                      {isMine && (
-                        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0 text-xs font-bold text-white">
-                          {(user?.first_name?.charAt(0) || 'Y') + (user?.last_name?.charAt(0) || '')}
+                        return (
+                          <motion.div
+                            key={msg.id}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: index * 0.02 }}
+                            className={`flex gap-3 group items-start ${isMine ? 'justify-end' : 'justify-start'}`}
+                          >
+                            {!isMine && (
+                              <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center flex-shrink-0 text-xs font-bold mt-1">
+                                {msg.avatar_url ? (
+                                  <img src={msg.avatar_url} className="w-full h-full rounded-full object-cover" alt="" />
+                                ) : (
+                                  (msg.first_name?.[0] || 'U')
+                                )}
+                              </div>
+                            )}
+
+                            <div className={`max-w-xs lg:max-w-md ${isMine ? 'order-2' : 'order-1'}`}>
+                              {!isMine && (
+                                <p className="text-xs font-semibold text-muted-foreground mb-1 ml-1">
+                                  {senderName}
+                                </p>
+                              )}
+
+                              <div className="flex flex-col gap-1">
+                                {/* Reply Context */}
+                                {parentMsg && (
+                                  <div className={`text-xs p-1 px-2 rounded-md mb-1 flex items-center gap-1 opacity-70 ${isMine ? 'bg-primary-foreground/20 text-white' : 'bg-muted text-muted-foreground'}`}>
+                                    <ReplyIcon className="w-3 h-3" />
+                                    <span className="truncate max-w-[150px]">{parentMsg.content}</span>
+                                  </div>
+                                )}
+
+                                <motion.div
+                                  className={`px-4 py-3 rounded-2xl relative transition-all ${isMine
+                                    ? 'bg-primary text-white rounded-br-none'
+                                    : 'bg-secondary text-foreground rounded-bl-none'
+                                    }`}
+                                >
+                                  <p className="break-words text-sm whitespace-pre-wrap">{msg.content}</p>
+                                  {msg.attachment_url && (
+                                    <div className="mt-2">
+                                      {msg.message_type === 'image' || msg.attachment_url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                                        <img src={msg.attachment_url} alt="Attachment" className="max-w-full h-auto rounded-lg max-h-60 object-cover border" />
+                                      ) : (
+                                        <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-2 bg-background/50 rounded-md hover:bg-background/80 transition-colors">
+                                          <div className="p-2 bg-primary/10 rounded-md">
+                                            <svg className="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                                          </div>
+                                          <span className="text-xs text-primary underline truncate max-w-[150px]">View Attachment</span>
+                                        </a>
+                                      )}
+                                    </div>
+                                  )}
+                                  {msg.is_edited && <span className="text-[10px] opacity-60 ml-2">(edited)</span>}
+                                </motion.div>
+                              </div>
+
+                              <div className={`flex items-center gap-2 mt-1 px-1 ${isMine ? 'justify-end' : 'justify-start'}`}>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {new Date(msg.created_at).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </p>
+
+                                {/* Message Actions */}
+                                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                                  <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setReplyTo(msg)} title="Reply">
+                                    <ReplyIcon className="w-3 h-3" />
+                                  </Button>
+                                  {isMine && (
+                                    <>
+                                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { setEditingMessage(msg); setMessageInput(msg.content); }} title="Edit">
+                                        <Edit2 className="w-3 h-3" />
+                                      </Button>
+                                      <Button variant="ghost" size="icon" className="h-5 w-5 text-destructive" onClick={() => handleDeleteMessage(msg.id)} title="Delete">
+                                        <Trash2 className="w-3 h-3" />
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })
+                    )}
+                    {typingUsers.size > 0 && (
+                      <div className="text-xs text-muted-foreground italic px-4 animate-pulse">
+                        {Array.from(typingUsers).join(', ')} is typing...
+                      </div>
+                    )}
+                  </AnimatePresence>
+                  <div ref={messagesEndRef} />
+                </div >
+
+                {/* Input Area */}
+                < motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 }}
+                  className="bg-card border-t border-border p-6 relative"
+                >
+                  <AnimatePresence>
+                    {replyTo && (
+                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute -top-12 left-6 right-6 bg-secondary/90 backdrop-blur-sm p-2 px-4 rounded-md flex justify-between items-center text-xs">
+                        <div className="flex items-center gap-2">
+                          <ReplyIcon className="w-4 h-4 text-primary" />
+                          <span>Replying to <strong>{replyTo.first_name}</strong>: {replyTo.content.substring(0, 30)}...</span>
                         </div>
-                      )}
-                    </motion.div>
-                  );
-                })
-              )}
-            </AnimatePresence>
-            <div ref={messagesEndRef} />
-          </div>
+                        <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => setReplyTo(null)}><X className="w-4 h-4" /></Button>
+                      </motion.div>
+                    )}
+                    {editingMessage && (
+                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute -top-12 left-6 right-6 bg-secondary/90 backdrop-blur-sm p-2 px-4 rounded-md flex justify-between items-center text-xs">
+                        <div className="flex items-center gap-2">
+                          <Edit2 className="w-4 h-4 text-primary" />
+                          <span>Editing message</span>
+                        </div>
+                        <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => { setEditingMessage(null); setMessageInput(''); }}><X className="w-4 h-4" /></Button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-          {/* Input Area */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-card border-t border-border p-6"
-          >
-            <form onSubmit={handleSendMessage} className="flex gap-3">
-              <Button variant="ghost" size="sm" type="button">
-                <Plus className="w-4 h-4" />
-              </Button>
+                  {
+                    showEmojiPicker && (
+                      <div className="absolute bottom-20 right-6 z-50">
+                        <EmojiPicker onEmojiClick={handleEmojiClick} theme={Theme.DARK} />
+                      </div>
+                    )
+                  }
 
-              <Input
-                placeholder="Type your message..."
-                value={messageInput}
-                onChange={(e) => setMessageInput(e.target.value)}
-                className="flex-1"
-              />
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
 
-              <Button variant="ghost" size="sm" type="button">
-                <Smile className="w-4 h-4" />
-              </Button>
+                  <form onSubmit={handleSendMessage} className="flex gap-3 items-end">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading}
+                    >
+                      {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
+                    </Button>
 
-              <Button
-                type="submit"
-                disabled={!messageInput.trim() || !selectedRoomId}
-                className="gap-2"
-              >
-                <Send className="w-4 h-4" />
-              </Button>
-            </form>
-          </motion.div>
-        </motion.div>
-      </main>
-    </div>
+                    <Input
+                      placeholder={replyTo ? "Type your reply..." : "Type your message..."}
+                      value={messageInput}
+                      onChange={handleTypingInput}
+                      className="flex-1 bg-secondary/50 border-0 focus-visible:ring-1 focus-visible:ring-primary h-11"
+                    />
+
+                    <Button variant="ghost" size="sm" type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className={`text-muted-foreground hover:text-foreground ${showEmojiPicker ? 'text-primary' : ''}`}>
+                      <Smile className="w-5 h-5" />
+                    </Button>
+
+                    <Button type="submit" size="sm" disabled={!messageInput.trim() && !isUploading} className="h-11">
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  </form>
+                </motion.div >
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground space-y-4">
+                <div className="p-4 bg-secondary/50 rounded-full">
+                  <span className="text-4xl">💬</span>
+                </div>
+                <p className="text-lg font-medium">Select a conversation</p>
+                <p className="text-sm max-w-xs text-center">Choose a room or user from the sidebar to start chatting.</p>
+              </div>
+            )}
+        </motion.div >
+      </main >
+    </div >
   );
 }
+
 
 export default function ChatPage() {
   return (

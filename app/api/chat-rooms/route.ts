@@ -22,20 +22,16 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const workspaceId = searchParams.get('workspaceId');
 
-    if (!workspaceId) {
-      return NextResponse.json(
-        { error: 'Workspace ID is required' },
-        { status: 400 }
-      );
-    }
-
-    const rooms = await query(
-      `SELECT cr.* FROM chat_rooms cr
+    // Fetch all rooms (global access)
+    // We can filter by workspace if provided, but default to all relevant rooms
+    let queryStr = `SELECT cr.* FROM chat_rooms cr
        INNER JOIN chat_room_members crm ON cr.id = crm.room_id
-       WHERE cr.workspace_id = ? AND crm.user_id = ? AND cr.is_archived = false
-       ORDER BY cr.created_at DESC`,
-      [workspaceId, payload.id]
-    );
+       WHERE crm.user_id = ? AND cr.is_archived = false
+       ORDER BY cr.created_at DESC`;
+
+    // If we want to strictly bypass workspace, we just ignored workspaceId line.
+
+    const rooms = await query(queryStr, [payload.id]);
 
     return NextResponse.json(rooms, { status: 200 });
   } catch (error) {
@@ -69,18 +65,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Verify user is member of workspace
-    const members = await query(
-      'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-      [workspace_id, payload.id]
-    );
 
-    if (!Array.isArray(members) || members.length === 0) {
-      return NextResponse.json(
-        { error: 'Not a member of this workspace' },
-        { status: 403 }
-      );
-    }
 
     // Create chat room
     const result = await query(
