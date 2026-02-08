@@ -100,9 +100,9 @@ export function DashboardSidebar() {
     return () => media.removeEventListener('change', update);
   }, []);
 
-  // Fetch unread count for Chat
+  // Fetch unread count for Chat (sessionStorage to match useAuth)
   const fetcher = (url: string) => {
-    const token = localStorage.getItem('auth_token');
+    const token = sessionStorage.getItem('auth_token');
     return fetch(url, { headers: { Authorization: `Bearer ${token}` } }).then(res => res.json());
   };
   const { data: unreadData, mutate: mutateUnread } = useSWR('/api/chat/unread-count', fetcher, { refreshInterval: 5000 });

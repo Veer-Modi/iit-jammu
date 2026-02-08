@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken, hashPassword } from '@/lib/auth';
+import { sendSystemMessage } from '@/lib/chat-system';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -129,22 +130,35 @@ export async function POST(req: NextRequest) {
     const insertResult = result as any;
     const userId = insertResult.insertId;
 
-    // Add to workspace if provided
-    if (workspace_id) {
+    // Add to default workspace (1) if not provided
+    const targetWorkspaceId = workspace_id || 1;
+
+    // Check if already member (unlikely for new user but good practice)
+    const existingMember = await query('SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?', [targetWorkspaceId, userId]);
+
+    if (!Array.isArray(existingMember) || existingMember.length === 0) {
       await query(
         `INSERT INTO workspace_members (workspace_id, user_id, role, designation, invited_by) 
          VALUES (?, ?, ?, ?, ?)`,
-        [workspace_id, userId, workspace_role || 'member', designation || null, payload.id]
+        [targetWorkspaceId, userId, workspace_role || 'member', designation || null, payload.id]
       );
     }
 
-    if (workspace_id) {
+    if (targetWorkspaceId) {
       await query(
         `INSERT INTO activity_logs (workspace_id, user_id, action, entity_type, entity_id) 
          VALUES (?, ?, ?, ?, ?)`,
         [workspace_id, payload.id, 'employee_created', 'user', userId]
       );
     }
+
+    if (targetWorkspaceId) {
+      // System Notification
+      await sendSystemMessage(Number(targetWorkspaceId), `👋 **Welcome to the team!**\nEveryone please welcome ${first_name} ${last_name} (${designation || 'New Member'})!`);
+    }
+
+    // Auto-add to General Room
+    await addToGeneralRoom(userId, workspace_id);
 
     return NextResponse.json(
       {
@@ -167,5 +181,36 @@ export async function POST(req: NextRequest) {
       { error: 'Failed to create employee' },
       { status: 500 }
     );
+  }
+}
+
+async function addToGeneralRoom(userId: number, workspaceId: number | undefined) {
+  try {
+    // Use provided workspaceId or default to 1
+    const wId = workspaceId || 1;
+
+    // 1. Find General Room for this Workspace
+    const rooms = await query('SELECT id FROM chat_rooms WHERE name = ? AND workspace_id = ? LIMIT 1', ['General', wId]);
+    let roomId;
+
+    if (Array.isArray(rooms) && rooms.length > 0) {
+      roomId = (rooms[0] as any).id;
+    } else {
+      // 2. Create General Room if not exists
+      const result = await query(
+        `INSERT INTO chat_rooms (workspace_id, name, type, description, created_by) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [wId, 'General', 'channel', 'General discussion', userId] // Creator is the new user effectively or system
+      );
+      roomId = (result as any).insertId;
+    }
+
+    // 3. Add User to Room
+    await query(
+      'INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)',
+      [roomId, userId]
+    );
+  } catch (err) {
+    console.error('Failed to add employee to General room:', err);
   }
 }

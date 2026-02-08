@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+import { sendSystemMessage } from '@/lib/chat-system';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -75,6 +76,21 @@ export async function POST(req: NextRequest) {
       [workspaceId, payload.id, 'admin']
     );
 
+    // Create General channel for this workspace (for announcements & team chat)
+    await query(
+      `INSERT INTO chat_rooms (workspace_id, name, type, description, created_by) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [workspaceId, 'General', 'channel', 'General discussion and announcements', payload.id]
+    );
+    const generalRoomResult = await query('SELECT id FROM chat_rooms WHERE workspace_id = ? AND name = ? ORDER BY id DESC LIMIT 1', [workspaceId, 'General']);
+    const generalRoomId = Array.isArray(generalRoomResult) && generalRoomResult.length > 0 ? (generalRoomResult[0] as any).id : null;
+    if (generalRoomId) {
+      await query('INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)', [generalRoomId, payload.id]);
+    }
+
+    // System Notification (announcement in General)
+    await sendSystemMessage(Number(workspaceId), `🚀 **Workspace Created**\n\n**Name:** ${name}\n**Description:** ${description || 'No description'}\n\nWelcome to your new workspace!`);
+
     // Fetch created workspace
     const workspaces = await query(
       'SELECT * FROM workspaces WHERE id = ?',
@@ -84,7 +100,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         message: 'Workspace created successfully',
-        workspace: workspaces[0],
+        workspace: (workspaces as any[])[0],
       },
       { status: 201 }
     );

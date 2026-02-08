@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProtectedRoute } from '@/components/protected-route';
 import { DashboardSidebar } from '@/components/dashboard-sidebar';
+import { useAuth } from '@/hooks/use-auth';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -82,7 +83,7 @@ type ProjectMember = {
 };
 
 const authFetcher = async (url: string) => {
-  const token = localStorage.getItem('auth_token');
+  const token = sessionStorage.getItem('auth_token');
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -96,6 +97,8 @@ const authFetcher = async (url: string) => {
 };
 
 function ProjectsContent() {
+  const { user } = useAuth();
+  const canManage = user?.role === 'admin' || user?.role === 'manager';
   const { data: workspaces, error: wsError, isLoading: wsLoading } = useSWR<Workspace[]>(
     '/api/workspaces',
     authFetcher
@@ -133,7 +136,7 @@ function ProjectsContent() {
 
   const projectList = useMemo(() => projects || [], [projects]);
 
-  const membersKey = activeWorkspaceId ? `/api/workspace-members?workspaceId=${activeWorkspaceId}` : null;
+  const membersKey = canManage && activeWorkspaceId ? `/api/workspace-members?workspaceId=${activeWorkspaceId}` : null;
   const { data: workspaceMembers } = useSWR<WorkspaceMember[]>(membersKey, authFetcher);
   const workspaceMemberList = useMemo(() => workspaceMembers || [], [workspaceMembers]);
 
@@ -165,10 +168,14 @@ function ProjectsContent() {
   const handleCreate = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setFormError('');
+    if (!activeWorkspaceId) {
+      setFormError('Please select a workspace first');
+      return;
+    }
     setIsCreating(true);
 
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: {
@@ -206,7 +213,7 @@ function ProjectsContent() {
   const addProjectMember = async () => {
     if (!selectedProject?.id) return;
     if (selectedMemberUserId === 'unselected') return;
-    const token = localStorage.getItem('auth_token');
+    const token = sessionStorage.getItem('auth_token');
     setIsUpdatingMembers(true);
     try {
       const res = await fetch('/api/project-members', {
@@ -231,7 +238,7 @@ function ProjectsContent() {
   };
 
   const removeProjectMember = async (projectMemberId: number) => {
-    const token = localStorage.getItem('auth_token');
+    const token = sessionStorage.getItem('auth_token');
     setIsUpdatingMembers(true);
     try {
       const res = await fetch('/api/project-members', {
@@ -251,7 +258,7 @@ function ProjectsContent() {
   };
 
   const markProjectCompleted = async (projectId: number) => {
-    const token = localStorage.getItem('auth_token');
+    const token = sessionStorage.getItem('auth_token');
     setIsMarkingCompleted(projectId);
     try {
       const res = await fetch(`/api/projects/${projectId}`, {
@@ -302,10 +309,16 @@ function ProjectsContent() {
               <ChevronDown className="w-4 h-4 text-muted-foreground absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
 
-            <Button onClick={() => setShowForm((s) => !s)} className="gap-2 btn-hover-lift">
-              <Plus className="w-4 h-4" />
-              New Project
-            </Button>
+            {canManage && (
+              <Button
+                onClick={() => setShowForm((s) => !s)}
+                className="gap-2 btn-hover-lift"
+                disabled={!activeWorkspaceId || workspaceList.length === 0}
+              >
+                <Plus className="w-4 h-4" />
+                New Project
+              </Button>
+            )}
           </div>
         </motion.div>
 
@@ -317,7 +330,7 @@ function ProjectsContent() {
         )}
 
         <AnimatePresence>
-          {showForm && (
+          {canManage && showForm && (
             <motion.div
               initial={{ opacity: 0, y: -12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -415,7 +428,7 @@ function ProjectsContent() {
             <DialogHeader>
               <DialogTitle>Project Members</DialogTitle>
               <DialogDescription>
-                Add workspace members to this project. Only project members should be assigned tasks.
+                {canManage ? 'Add workspace members to this project. Only project members can be assigned tasks.' : 'Project members who can be assigned tasks.'}
               </DialogDescription>
             </DialogHeader>
 
@@ -423,6 +436,7 @@ function ProjectsContent() {
               <Card className="p-4 text-sm text-muted-foreground">Select a project.</Card>
             ) : (
               <div className="space-y-4">
+                {canManage && (
                 <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
                   <div className="flex-1 space-y-2">
                     <Label>Add member</Label>
@@ -432,11 +446,15 @@ function ProjectsContent() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="unselected">Select…</SelectItem>
-                        {workspaceMemberList.map((m) => (
-                          <SelectItem key={m.user_id} value={String(m.user_id)}>
-                            {m.first_name} {m.last_name} ({m.email})
-                          </SelectItem>
-                        ))}
+                        {workspaceMemberList.map((m) => {
+                          const uid = (m as { user_id?: number }).user_id ?? (m as { id?: number }).id;
+                          if (!uid) return null;
+                          return (
+                            <SelectItem key={uid} value={String(uid)}>
+                              {m.first_name} {m.last_name} ({m.email})
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                   </div>
@@ -449,6 +467,7 @@ function ProjectsContent() {
                     Add
                   </Button>
                 </div>
+                )}
 
                 {projectMemberList.length === 0 ? (
                   <Card className="p-6 text-center text-muted-foreground">No project members yet.</Card>
@@ -462,15 +481,17 @@ function ProjectsContent() {
                           </p>
                           <p className="text-xs text-muted-foreground truncate">{pm.email}</p>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          onClick={() => removeProjectMember(pm.id).catch(console.error)}
-                          disabled={isUpdatingMembers}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        {canManage && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => removeProjectMember(pm.id).catch(console.error)}
+                            disabled={isUpdatingMembers}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </Card>
                     ))}
                   </div>
@@ -500,6 +521,11 @@ function ProjectsContent() {
           <Card className="p-10 text-center">
             <AlertCircle className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-60" />
             <p className="text-muted-foreground">{(projectsError as Error).message}</p>
+          </Card>
+        ) : !activeWorkspaceId ? (
+          <Card className="p-12 text-center">
+            <Folder className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-60" />
+            <p className="text-muted-foreground">Select a workspace above to view and create projects.</p>
           </Card>
         ) : projectList.length === 0 ? (
           <Card className="p-12 text-center">
@@ -565,8 +591,9 @@ function ProjectsContent() {
                       onClick={() => openMembers(p)}
                     >
                       <UsersIcon className="w-4 h-4" />
-                      Members
+                      {canManage ? 'Add Members' : 'Members'}
                     </Button>
+                    {canManage && (
                     <Button
                       className="gap-2"
                       onClick={() => markProjectCompleted(p.id).catch(console.error)}
@@ -579,6 +606,7 @@ function ProjectsContent() {
                       )}
                       Complete
                     </Button>
+                    )}
                   </div>
                 </Card>
               </motion.div>

@@ -8,7 +8,11 @@ import { DashboardSidebar } from '@/components/dashboard-sidebar';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Plus, Search, MoreVertical, Smile, Loader2, AlertCircle, ChevronDown, X, Edit2, Trash2, Reply as ReplyIcon } from 'lucide-react';
+import {
+  Send, Plus, Search, MoreVertical, Smile, Loader2, AlertCircle,
+  ChevronDown, X, Edit2, Trash2, Reply as ReplyIcon,
+  User as UserIcon, Users as UsersIcon, Hash as HashIcon
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
@@ -58,7 +62,7 @@ interface Message {
 type Workspace = { id: number; name: string };
 
 const authFetcher = async (url: string) => {
-  const token = localStorage.getItem('auth_token');
+  const token = sessionStorage.getItem('auth_token');
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -97,8 +101,8 @@ function ChatContent() {
 
 
 
-  // Fetch global rooms
-  const roomsKey = '/api/chat-rooms?workspaceId=1'; // Defaulting to 1 for now or just generic if API handles it
+  // Fetch rooms for active workspace (API returns all rooms user is member of; workspaceId is optional filter)
+  const roomsKey = activeWorkspaceId ? `/api/chat-rooms?workspaceId=${activeWorkspaceId}` : '/api/chat-rooms';
   const {
     data: rooms,
     error: roomsError,
@@ -167,18 +171,71 @@ function ChatContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false);
-  // const [isCreatingRoom, setIsCreatingRoom] = useState(false);
-  // const [createRoomError, setCreateRoomError] = useState('');
-  // const [createRoomForm, setCreateRoomForm] = useState<{
-  //   name: string;
-  //   type: 'direct' | 'group' | 'channel';
-  //   description: string;
-  // }>({
-  //   name: '',
-  //   type: 'channel',
-  //   description: '',
-  // });
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [createGroupName, setCreateGroupName] = useState('');
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<number[]>([]);
+
+  const toggleGroupMember = (userId: number) => {
+    setSelectedGroupMembers(prev =>
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const handleCreateGroup = async () => {
+    if (!createGroupName.trim() || !activeWorkspaceId) return;
+    const token = sessionStorage.getItem('auth_token');
+    try {
+      setIsCreatingGroup(true);
+      const res = await fetch('/api/chat-rooms', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: createGroupName,
+          type: 'group',
+          description: 'Group Chat',
+          workspace_id: activeWorkspaceId,
+          member_ids: selectedGroupMembers
+        }),
+      });
+
+      if (!res.ok) throw new Error('Failed to create group');
+
+      const data = await res.json();
+
+      if (data.roomId) {
+        setIsCreateGroupOpen(false);
+        setCreateGroupName('');
+        setSelectedGroupMembers([]);
+        await mutateRooms(); // Wait for it!
+        setSelectedRoomId(data.roomId);
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Failed to create group');
+    } finally {
+      setIsCreatingGroup(false);
+    }
+  };
+
+  const handleDeleteRoom = async (roomId: number) => {
+    if (!confirm('Are you sure you want to delete this chat?')) return;
+    try {
+      const token = sessionStorage.getItem('auth_token');
+      await fetch(`/api/chat-rooms/${roomId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      await mutateRooms();
+      if (selectedRoomId === roomId) setSelectedRoomId(null);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to delete chat');
+    }
+  };
 
   const [isMembersDialogOpen, setIsMembersDialogOpen] = useState(false);
   const [isUpdatingMembers, setIsUpdatingMembers] = useState(false);
@@ -225,14 +282,39 @@ function ChatContent() {
       mutateMessages(current => current?.filter(m => m.id !== data.id), { revalidate: false });
     };
 
+    const handleNewMessage = (msg: Message) => {
+      // If the message is for the current room
+      if (Number(msg.room_id) === Number(selectedRoomId)) {
+        // Only append if it's not already in the list (deduplication)
+        mutateMessages(current => {
+          if (current?.some(m => m.id === msg.id)) return current;
+          return [msg, ...(current || [])]; // Prepend or Append? SWR usually returns newest first?
+          // Wait, Query: ORDER BY m.created_at DESC.
+          // So list is Newest -> Oldest.
+          // map reverse() in API?
+          // GET /api/messages returns (messages as any[]).reverse(). 
+          // So Oldest -> Newest. (Audit API 302:52)
+          // So we should APPEND.
+          return [...(current || []), msg];
+        }, { revalidate: false });
+
+        scrollToBottom();
+      } else {
+        // If message is for another room, trigger a room list revalidate to update unread counts
+        mutateRooms();
+      }
+    };
+
     socket.on('typing', handleTyping);
     socket.on('message-updated', handleMessageUpdated);
     socket.on('message-deleted', handleMessageDeleted);
+    socket.on('new-message', handleNewMessage);
 
     return () => {
       socket.off('typing', handleTyping);
       socket.off('message-updated', handleMessageUpdated);
       socket.off('message-deleted', handleMessageDeleted);
+      socket.off('new-message', handleNewMessage);
     };
   }, [socket, selectedRoomId, mutateMessages]);
 
@@ -255,7 +337,7 @@ function ChatContent() {
 
     const markRead = async () => {
       try {
-        const token = localStorage.getItem('auth_token');
+        const token = sessionStorage.getItem('auth_token');
         await fetch('/api/chat/read', {
           method: 'POST',
           headers: {
@@ -283,7 +365,7 @@ function ChatContent() {
     if (!activeWorkspaceId || !memberSearch.trim()) return;
     setMemberError('');
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       const params = new URLSearchParams({
         workspaceId: activeWorkspaceId,
         q: memberSearch.trim(),
@@ -304,7 +386,7 @@ function ChatContent() {
     setIsUpdatingMembers(true);
     setMemberError('');
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       const res = await fetch('/api/chat-room-members', {
         method: 'POST',
         headers: {
@@ -330,7 +412,7 @@ function ChatContent() {
     setIsUpdatingMembers(true);
     setMemberError('');
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       const res = await fetch('/api/chat-room-members', {
         method: 'DELETE',
         headers: {
@@ -357,7 +439,7 @@ function ChatContent() {
   const handleDeleteMessage = async (messageId: number) => {
     if (!confirm('Are you sure you want to delete this message?')) return;
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       await fetch(`/api/messages?id=${messageId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
@@ -379,7 +461,7 @@ function ChatContent() {
     if (!messageInput.trim()) return;
     if (!selectedRoomId) return;
 
-    const token = localStorage.getItem('auth_token');
+    const token = sessionStorage.getItem('auth_token');
 
     // Handle Edit
     if (editingMessage) {
@@ -406,13 +488,14 @@ function ChatContent() {
     }
 
     // Handle New Message
+    const senderId = user?.id ? Number(user.id) : 0;
     const optimistic: Message = {
       id: Date.now(),
-      sender_id: user?.id || 0,
+      sender_id: senderId,
       content: messageInput,
       created_at: new Date().toISOString(),
       first_name: user?.first_name,
-      last_name: user?.last_name,
+      last_name: user?.last_name || '',
       avatar_url: user?.avatar_url,
       reply_to_id: replyTo?.id || null,
     };
@@ -475,7 +558,7 @@ function ChatContent() {
 
     // 2. Create new DM room
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       // setIsCreatingRoom(true); 
 
       const res = await fetch('/api/chat-rooms', {
@@ -486,9 +569,9 @@ function ChatContent() {
         },
         body: JSON.stringify({
 
-          name: `${targetUser.first_name} ${targetUser.last_name}`,
+          name: `${targetUser.first_name} ${targetUser.last_name}`, // Fallback name
           type: 'direct',
-          description: String(targetUser.id),
+          description: String(targetUser.id), // We use description to store the target user ID for simple matching
           member_ids: [targetUser.id],
           workspace_id: activeWorkspaceId ? Number(activeWorkspaceId) : 1,
         }),
@@ -522,7 +605,7 @@ function ChatContent() {
       if (!res.ok) throw new Error(data.error);
 
       // Send message with attachment
-      const token = localStorage.getItem('auth_token');
+      const token = sessionStorage.getItem('auth_token');
       const isImage = e.target.files[0].type.startsWith('image/');
       const optimistic: Message = {
         id: Date.now(),
@@ -609,36 +692,85 @@ function ChatContent() {
                   <AlertCircle className="w-6 h-6 mx-auto mb-2 opacity-60" />
                   {(roomsError as Error).message}
                 </div>
-              ) : filteredRooms.length === 0 ? (
-                <div className="p-6 text-center text-muted-foreground">
-                  No rooms found
-                </div>
               ) : (
-                filteredRooms.map((room, index) => (
-                  <motion.button
-                    key={room.id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.05 }}
-                    onClick={() => setSelectedRoomId(room.id)}
-                    className={`w-full text-left p-4 border-b border-border hover:bg-secondary transition-colors ${selectedRoomId === room.id ? 'bg-primary/10' : ''
-                      }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 bg-gradient-to-br from-primary/50 to-accent/50 rounded-full flex items-center justify-center text-2xl flex-shrink-0">
-                        {room.type === 'direct' ? '👤' : room.type === 'group' ? '👥' : '#'}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-foreground truncate">
-                          {room.name}
-                        </h3>
-                        <p className="text-xs text-muted-foreground capitalize">
-                        </p>
-                      </div>
-                    </div>
-
-                  </motion.button>
-                ))
+                <>
+                  <div className="px-6 pb-2 pt-2 flex justify-between items-center">
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      Channels
+                    </h3>
+                    <Dialog open={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-5 w-5 text-muted-foreground hover:text-primary">
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Create Group Chat</DialogTitle>
+                          <DialogDescription>Create a new group chat for your team.</DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4 py-4">
+                          <div className="space-y-2">
+                            <Label>Group Name</Label>
+                            <Input
+                              placeholder="e.g. Marketing Team"
+                              value={createGroupName}
+                              onChange={(e) => setCreateGroupName(e.target.value)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Add Members</Label>
+                            <div className="max-h-48 overflow-y-auto border rounded-md p-2 space-y-1">
+                              {chatUsersLoading ? (
+                                <div className="text-xs text-muted-foreground">Loading users...</div>
+                              ) : (
+                                chatUsers?.filter((u: any) => u.id !== user?.id).map((u: any) => (
+                                  <div
+                                    key={u.id}
+                                    className={`flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors ${selectedGroupMembers.includes(u.id) ? 'bg-primary/10' : 'hover:bg-secondary'}`}
+                                    onClick={() => toggleGroupMember(u.id)}
+                                  >
+                                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedGroupMembers.includes(u.id) ? 'bg-primary border-primary' : 'border-muted-foreground'}`}>
+                                      {selectedGroupMembers.includes(u.id) && <div className="w-2 h-2 rounded-full bg-white" />}
+                                    </div>
+                                    <div className="w-6 h-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-medium overflow-hidden">
+                                      {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover" /> : u.first_name?.[0]}
+                                    </div>
+                                    <div className="text-xs font-medium">{u.first_name} {u.last_name}</div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setIsCreateGroupOpen(false)}>Cancel</Button>
+                          <Button onClick={handleCreateGroup} disabled={isCreatingGroup || !createGroupName.trim()}>
+                            {isCreatingGroup ? 'Creating...' : 'Create Group'}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                  {filteredRooms.filter(r => r.type !== 'direct').map((room) => (
+                    <motion.button
+                      key={room.id}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      onClick={() => setSelectedRoomId(room.id)}
+                      className={`w-full text-left px-6 py-2 hover:bg-secondary/50 transition-colors flex items-center gap-2 ${selectedRoomId === room.id ? 'bg-primary/10 text-primary border-r-2 border-primary' : 'text-muted-foreground'
+                        }`}
+                    >
+                      <span className="text-lg">#</span>
+                      <span className="font-medium text-sm truncate flex-1">{room.name}</span>
+                      {(room as any).unread_count > 0 && (
+                        <span className="bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                          {(room as any).unread_count}
+                        </span>
+                      )}
+                    </motion.button>
+                  ))}
+                </>
               )}
             </AnimatePresence>
 
@@ -648,7 +780,45 @@ function ChatContent() {
                 Direct Messages
               </h3>
             </div>
+
+            {/* Active DMs List */}
             <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-1">
+              {filteredRooms.filter(r => r.type === 'direct').map((room) => {
+                const displayName = (room as any).dm_name || room.name;
+                const displayAvatar = (room as any).dm_avatar;
+
+                return (
+                  <motion.button
+                    key={room.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    onClick={() => setSelectedRoomId(room.id)}
+                    className={`w-full flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors text-left group ${selectedRoomId === room.id ? 'bg-primary/10' : ''}`}
+                  >
+                    <div className="relative">
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary overflow-hidden">
+                        {displayAvatar ? <img src={displayAvatar} className="w-full h-full object-cover" /> : displayName[0]}
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0 flex items-center justify-between">
+                      <div className="text-sm font-medium truncate group-hover:text-primary transition-colors">{displayName}</div>
+                      {(room as any).unread_count > 0 && (
+                        <span className="bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                          {(room as any).unread_count}
+                        </span>
+                      )}
+                    </div>
+                  </motion.button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 px-6 pb-2 border-t pt-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                All Employees
+              </h3>
+            </div>
+            <div className="overflow-y-auto px-4 pb-4 space-y-1 max-h-48">
               {chatUsersLoading ? (
                 <div className="text-center text-xs text-muted-foreground py-2">Loading users...</div>
               ) : chatUsers?.length === 0 ? (
@@ -658,17 +828,15 @@ function ChatContent() {
                   <button
                     key={u.id}
                     onClick={() => handleUserClick(u)}
-                    className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors text-left group"
+                    className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors text-left group opacity-70 hover:opacity-100"
                   >
                     <div className="relative">
-                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary">
+                      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-medium text-primary">
                         {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full rounded-full object-cover" /> : u.first_name?.[0]}
                       </div>
-                      <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-background ${u.is_active ? 'bg-green-500' : 'bg-gray-300'}`}></span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate group-hover:text-primary transition-colors">{u.first_name} {u.last_name}</div>
-                      <div className="text-[10px] text-muted-foreground truncate">{u.role}</div>
+                      <div className="text-xs font-medium truncate">{u.first_name} {u.last_name}</div>
                     </div>
                   </button>
                 ))
@@ -687,121 +855,137 @@ function ChatContent() {
           {/* Chat Header */}
           < div className="bg-card border-b border-border p-6 flex justify-between items-center" >
             <div>
-              <h3 className="text-lg font-bold text-foreground">
-                {selectedRoom?.name || 'Select a room'}
+              <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+                {selectedRoom?.type === 'direct' ? (
+                  <>
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium text-primary overflow-hidden">
+                      {(selectedRoom as any).dm_avatar ? <img src={(selectedRoom as any).dm_avatar} className="w-full h-full object-cover" /> : ((selectedRoom as any).dm_name?.[0] || selectedRoom.name[0])}
+                    </div>
+                    {(selectedRoom as any).dm_name || selectedRoom.name}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-muted-foreground">#</span>
+                    {selectedRoom?.name || 'Select a room'}
+                  </>
+                )}
               </h3>
-              <p className="text-sm text-muted-foreground capitalize flex items-center gap-3">
+              <div className="text-sm text-muted-foreground capitalize flex items-center gap-3">
                 <span>
                   {selectedRoom?.type === 'channel' ? '#' : ''}
                   {selectedRoom?.type || ''}
                 </span>
                 {selectedRoomId && (
-                  <Dialog open={isMembersDialogOpen} onOpenChange={setIsMembersDialogOpen}>
-                    <DialogTrigger asChild>
-                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs">
-                        Members
-                        {Array.isArray(roomMembers) && roomMembers.length > 0 && (
-                          <span className="ml-1 inline-flex items-center justify-center rounded-full bg-secondary px-1.5 text-[10px]">
-                            {roomMembers.length}
-                          </span>
-                        )}
+                  <div className="flex items-center gap-2">
+                    {/* Delete Room Button */}
+                    {selectedRoom?.type !== 'direct' && ( // Allow deleting groups/channels
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                        onClick={() => selectedRoomId && handleDeleteRoom(selectedRoomId)}
+                        title="Delete Chat"
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </Button>
-                    </DialogTrigger>
-                    <DialogContent className="max-w-lg">
-                      <DialogHeader>
-                        <DialogTitle>Room members</DialogTitle>
-                        <DialogDescription>
-                          View and manage members in this chat room.
-                        </DialogDescription>
-                      </DialogHeader>
+                    )}
 
-                      {memberError && (
-                        <div className="mb-3 p-2 rounded-md border border-destructive/40 bg-destructive/10 text-xs text-destructive">
-                          {memberError}
-                        </div>
-                      )}
+                    <Dialog open={isMembersDialogOpen} onOpenChange={setIsMembersDialogOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs">
+                          Members
+                          {Array.isArray(roomMembers) && roomMembers.length > 0 ? (
+                            <span className="ml-1 inline-flex items-center justify-center rounded-full bg-secondary px-1.5 text-[10px]">
+                              {roomMembers.length}
+                            </span>
+                          ) : null}
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-lg">
+                        <DialogHeader>
+                          <DialogTitle>Room members</DialogTitle>
+                          <DialogDescription>
+                            View and manage members in this chat room.
+                          </DialogDescription>
+                        </DialogHeader>
 
-                      <div className="space-y-4">
-                        <div>
-                          <p className="text-xs font-semibold text-muted-foreground mb-1">
-                            Current members
-                          </p>
-                          <div className="max-h-52 overflow-y-auto border rounded-md divide-y">
-                            {membersLoading ? (
-                              <div className="p-3 text-xs text-muted-foreground">Loading members...</div>
-                            ) : membersError ? (
-                              <div className="p-3 text-xs text-muted-foreground">
-                                Failed to load members
-                              </div>
-                            ) : !roomMembers || roomMembers.length === 0 ? (
-                              <div className="p-3 text-xs text-muted-foreground">No members yet.</div>
-                            ) : (
-                              roomMembers.map((m) => {
-                                const initials = `${m.first_name?.[0] || ''}${m.last_name?.[0] || ''}` || 'U';
-                                const isSelf = m.user_id === user?.id;
-                                return (
-                                  <div key={m.id} className="flex items-center justify-between px-3 py-2 text-sm">
-                                    <div className="flex items-center gap-2">
-                                      <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold">
-                                        {initials}
-                                      </div>
-                                      <div>
-                                        <div className="text-xs font-medium">
-                                          {m.first_name} {m.last_name}
+                        {memberError && (
+                          <div className="mb-3 p-2 rounded-md border border-destructive/40 bg-destructive/10 text-xs text-destructive">
+                            {memberError}
+                          </div>
+                        )}
+
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-xs font-semibold text-muted-foreground mb-1">
+                              Current members
+                            </p>
+                            <div className="max-h-52 overflow-y-auto border rounded-md divide-y">
+                              {membersLoading ? (
+                                <div className="p-3 text-xs text-muted-foreground">Loading members...</div>
+                              ) : membersError ? (
+                                <div className="p-3 text-xs text-muted-foreground">
+                                  Failed to load members
+                                </div>
+                              ) : !roomMembers || roomMembers.length === 0 ? (
+                                <div className="p-3 text-xs text-muted-foreground">No members yet.</div>
+                              ) : (
+                                roomMembers.map((m) => {
+                                  const initials = `${m.first_name?.[0] || ''}${m.last_name?.[0] || ''}` || 'U';
+                                  const isSelf = m.user_id === user?.id;
+                                  return (
+                                    <div key={m.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold">
+                                          {initials}
                                         </div>
-                                        <div className="text-[11px] text-muted-foreground">{m.email}</div>
+                                        <div>
+                                          <div className="text-xs font-medium">
+                                            {m.first_name} {m.last_name}
+                                          </div>
+                                          <div className="text-[11px] text-muted-foreground">{m.email}</div>
+                                        </div>
                                       </div>
+                                      {!isSelf && (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          disabled={isUpdatingMembers}
+                                          onClick={() => handleRemoveMember(m.user_id)}
+                                          className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
+                                        >
+                                          Remove
+                                        </Button>
+                                      )}
                                     </div>
-                                    {!isSelf && (
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={isUpdatingMembers}
-                                        onClick={() => handleRemoveMember(m.user_id)}
-                                        className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
-                                      >
-                                        Remove
-                                      </Button>
-                                    )}
-                                  </div>
-                                );
-                              })
-                            )}
+                                  );
+                                })
+                              )}
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="pt-2 border-t">
-                          <p className="text-xs font-semibold text-muted-foreground mb-1">
-                            Add members from workspace
-                          </p>
-                          <div className="flex gap-2 mb-2">
-                            <Input
-                              placeholder="Search by name or email"
-                              value={memberSearch}
-                              onChange={(e) => setMemberSearch(e.target.value)}
-                              className="h-8 text-xs"
-                            />
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              disabled={isUpdatingMembers || !memberSearch.trim()}
-                              onClick={handleSearchUsersForRoom}
-                              className="h-8 px-3 text-[11px]"
-                            >
-                              Search
-                            </Button>
-                          </div>
-                          {memberSearchResults.length > 0 && (
+                          <div className="pt-2 border-t">
+                            <p className="text-xs font-semibold text-muted-foreground mb-1">
+                              Add members from workspace
+                            </p>
+                            <div className="flex gap-2 mb-2">
+                              <Input
+                                placeholder="Search by name or email"
+                                value={memberSearch}
+                                onChange={(e) => setMemberSearch(e.target.value)}
+                                className="h-8 text-xs"
+                              />
+                            </div>
                             <div className="max-h-40 overflow-y-auto border rounded-md divide-y">
-                              {memberSearchResults.map((u) => {
+                              {(memberSearch ? memberSearchResults : chatUsers?.filter((u: any) => u.id !== user?.id))?.map((u: any) => {
                                 const initials = `${u.first_name?.[0] || ''}${u.last_name?.[0] || ''}` || 'U';
                                 const alreadyMember = roomMembers?.some((m) => m.user_id === u.id);
+                                if (!memberSearch && alreadyMember) return null; // Hide already members if not searching
                                 return (
                                   <div key={u.id} className="flex items-center justify-between px-3 py-2 text-sm">
                                     <div className="flex items-center gap-2">
                                       <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold">
-                                        {initials}
+                                        {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full rounded-full object-cover" /> : initials}
                                       </div>
                                       <div>
                                         <div className="text-xs font-medium">
@@ -817,30 +1001,31 @@ function ChatContent() {
                                       onClick={() => handleAddMember(u.id)}
                                       className="h-7 px-2 text-[11px]"
                                     >
-                                      {alreadyMember ? 'Already in room' : 'Add'}
+                                      {alreadyMember ? 'Joined' : 'Add'}
                                     </Button>
                                   </div>
                                 );
                               })}
+                              {(!memberSearch && !chatUsers) && <div className="p-3 text-xs text-muted-foreground text-center">Loading users...</div>}
                             </div>
-                          )}
+                          </div>
                         </div>
-                      </div>
 
-                      <DialogFooter className="mt-4">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => setIsMembersDialogOpen(false)}
-                          className="bg-transparent"
-                        >
-                          Close
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
+                        <DialogFooter className="mt-4">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setIsMembersDialogOpen(false)}
+                            className="bg-transparent"
+                          >
+                            Close
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
                 )}
-              </p>
+              </div>
             </div>
             <Button variant="ghost" size="sm">
               <MoreVertical className="w-4 h-4" />
@@ -869,11 +1054,35 @@ function ChatContent() {
                       </div>
                     ) : (
                       messageList.map((msg, index) => {
-                        const isMine = Number(msg.sender_id) === Number(user?.id);
+                        // Your messages = right, others' messages = left (compare as numbers for robustness)
+                        const currentUserId = user?.id != null ? Number(user.id) : null;
+                        const senderId = msg.sender_id != null ? Number(msg.sender_id) : null;
+                        const isSystemMessage = msg.message_type === 'system';
+                        const isMine = !isSystemMessage && currentUserId !== null && senderId !== null && senderId === currentUserId;
                         const senderName = `${msg.first_name || 'User'} ${msg.last_name || ''}`;
                         const parentMsg = msg.reply_to_id
                           ? messageList.find((m) => m.id === msg.reply_to_id)
                           : null;
+
+                        // System/announcement messages: centered, distinct style
+                        if (isSystemMessage) {
+                          return (
+                            <motion.div
+                              key={msg.id}
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="flex justify-center my-4"
+                            >
+                              <div className="max-w-lg px-4 py-3 rounded-xl bg-primary/10 border border-primary/30 text-center">
+                                <p className="text-sm text-muted-foreground font-medium mb-1">📢 Announcement</p>
+                                <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                                <p className="text-[10px] text-muted-foreground mt-2">
+                                  {new Date(msg.created_at).toLocaleString()}
+                                </p>
+                              </div>
+                            </motion.div>
+                          );
+                        }
 
                         return (
                           <motion.div
@@ -930,7 +1139,7 @@ function ChatContent() {
                                       )}
                                     </div>
                                   )}
-                                  {msg.is_edited && <span className="text-[10px] opacity-60 ml-2">(edited)</span>}
+                                  {!!msg.is_edited && <span className="text-[10px] opacity-60 ml-2">(edited)</span>}
                                 </motion.div>
                               </div>
 

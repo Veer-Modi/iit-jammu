@@ -172,6 +172,7 @@ function TasksContent() {
     description: '',
     priority: 'medium',
     due_date: '',
+    assigned_to: null as number | null,
   });
 
   const tasksKey = activeWorkspaceId
@@ -238,13 +239,14 @@ function TasksContent() {
           description: formData.description,
           priority: formData.priority,
           due_date: formData.due_date || null,
+          assigned_to: formData.assigned_to || null,
         }),
       });
 
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to create task');
 
-      setFormData({ title: '', description: '', priority: 'medium', due_date: '' });
+      setFormData({ title: '', description: '', priority: 'medium', due_date: '', assigned_to: null });
       setShowForm(false);
       await mutate();
     } finally {
@@ -539,6 +541,27 @@ function TasksContent() {
                         disabled={isLoading}
                       />
                     </div>
+                    <div>
+                      <Label htmlFor="assignee">Assign to</Label>
+                      <Select
+                        value={formData.assigned_to ? String(formData.assigned_to) : 'unassigned'}
+                        onValueChange={(v) =>
+                          setFormData({ ...formData, assigned_to: v === 'unassigned' ? null : Number(v) })
+                        }
+                      >
+                        <SelectTrigger id="assignee">
+                          <SelectValue placeholder="Select member" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unassigned">Unassigned</SelectItem>
+                          {memberList.map((m) => (
+                            <SelectItem key={m.id} value={String(m.user_id)}>
+                              {m.first_name} {m.last_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
                   <div className="flex gap-3 justify-end">
@@ -620,7 +643,14 @@ function TasksContent() {
             className="space-y-3"
           >
             <AnimatePresence>
-              {tasksLoading ? (
+              {!activeWorkspaceId || !activeProjectId ? (
+                <Card className="p-12 text-center">
+                  <ListTodo className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                  <p className="text-muted-foreground">
+                    {!activeWorkspaceId ? 'Select a workspace and project to view and create tasks.' : 'Select a project to view and create tasks.'}
+                  </p>
+                </Card>
+              ) : tasksLoading ? (
                 <Card className="p-12 text-center">
                   <Loader2 className="w-10 h-10 text-muted-foreground mx-auto mb-4 animate-spin" />
                   <p className="text-muted-foreground">Loading tasks...</p>
@@ -745,6 +775,13 @@ function TasksContent() {
               )}
             </AnimatePresence>
           </motion.div>
+        ) : !activeWorkspaceId || !activeProjectId ? (
+          <Card className="p-12 text-center">
+            <ListTodo className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+            <p className="text-muted-foreground">
+              {!activeWorkspaceId ? 'Select a workspace and project to use the Kanban board.' : 'Select a project to use the Kanban board.'}
+            </p>
+          </Card>
         ) : (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -756,7 +793,10 @@ function TasksContent() {
               <Card
                 key={status}
                 className="p-3 min-h-[320px]"
-                onDragOver={(e) => e.preventDefault()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
                 onDrop={(e) => {
                   const taskId = e.dataTransfer.getData('text/task-id');
                   if (!taskId) return;
@@ -780,6 +820,7 @@ function TasksContent() {
                       draggable
                       onDragStart={(e) => {
                         e.dataTransfer.setData('text/task-id', String(task.id));
+                        e.dataTransfer.effectAllowed = 'move';
                       }}
                       onClick={() => openTask(task)}
                     >

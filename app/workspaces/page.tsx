@@ -5,11 +5,20 @@ import useSWR from 'swr';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProtectedRoute } from '@/components/protected-route';
 import { DashboardSidebar } from '@/components/dashboard-sidebar';
+import { useAuth } from '@/hooks/use-auth';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Plus, Building2, Loader2, AlertCircle } from 'lucide-react';
+import { Plus, Building2, Loader2, AlertCircle, Users as UsersIcon } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 type Workspace = {
   id: number;
@@ -33,14 +42,75 @@ const authFetcher = async (url: string) => {
   return res.json();
 };
 
+type WorkspaceMember = {
+  user_id: number;
+  id?: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  role?: string;
+};
+
 function WorkspacesContent() {
+  const { user } = useAuth();
   const { data, error, isLoading, mutate } = useSWR<Workspace[]>('/api/workspaces', authFetcher);
+  const canManage = user?.role === 'admin' || user?.role === 'manager';
   const workspaces = useMemo(() => data || [], [data]);
 
   const [showForm, setShowForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [formData, setFormData] = useState({ name: '', description: '' });
   const [formError, setFormError] = useState('');
+
+  const [membersDialogWorkspace, setMembersDialogWorkspace] = useState<Workspace | null>(null);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberSearchResults, setMemberSearchResults] = useState<{ id: number; first_name: string; last_name: string; email: string }[]>([]);
+  const [isAddingMember, setIsAddingMember] = useState(false);
+  const [memberError, setMemberError] = useState('');
+
+  const membersKey = membersDialogWorkspace ? `/api/workspace-members?workspaceId=${membersDialogWorkspace.id}` : null;
+  const { data: membersData, mutate: mutateMembers } = useSWR<WorkspaceMember[]>(membersKey, authFetcher);
+  const workspaceMembers = useMemo(() => membersData || [], [membersData]);
+
+  const handleSearchMembers = async () => {
+    if (!membersDialogWorkspace || memberSearch.trim().length < 2) return;
+    setMemberError('');
+    try {
+      const token = sessionStorage.getItem('auth_token');
+      const res = await fetch(`/api/users/search?workspaceId=${membersDialogWorkspace.id}&q=${encodeURIComponent(memberSearch.trim())}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Search failed');
+      setMemberSearchResults(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setMemberError(err instanceof Error ? err.message : 'Search failed');
+      setMemberSearchResults([]);
+    }
+  };
+
+  const handleAddWorkspaceMember = async (userId: number) => {
+    if (!membersDialogWorkspace) return;
+    setIsAddingMember(true);
+    setMemberError('');
+    try {
+      const token = sessionStorage.getItem('auth_token');
+      const res = await fetch('/api/workspace-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workspace_id: membersDialogWorkspace.id, user_id: userId, role: 'member' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to add member');
+      setMemberSearch('');
+      setMemberSearchResults([]);
+      await mutateMembers();
+    } catch (err) {
+      setMemberError(err instanceof Error ? err.message : 'Failed to add member');
+    } finally {
+      setIsAddingMember(false);
+    }
+  };
 
   const handleCreate = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -89,14 +159,16 @@ function WorkspacesContent() {
             <p className="text-muted-foreground">Organize projects and teams by workspace</p>
           </div>
 
-          <Button onClick={() => setShowForm((s) => !s)} className="gap-2 btn-hover-lift">
-            <Plus className="w-4 h-4" />
-            New Workspace
-          </Button>
+          {canManage && (
+            <Button onClick={() => setShowForm((s) => !s)} className="gap-2 btn-hover-lift">
+              <Plus className="w-4 h-4" />
+              New Workspace
+            </Button>
+          )}
         </motion.div>
 
         <AnimatePresence>
-          {showForm && (
+          {canManage && showForm && (
             <motion.div
               initial={{ opacity: 0, y: -12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -185,6 +257,75 @@ function WorkspacesContent() {
             <p className="text-muted-foreground">No workspaces yet. Create one to get started.</p>
           </Card>
         ) : (
+          <>
+          <Dialog open={!!membersDialogWorkspace} onOpenChange={(open) => !open && setMembersDialogWorkspace(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Workspace Members</DialogTitle>
+                <DialogDescription>
+                  Add members to {membersDialogWorkspace?.name}. Only workspace members can be added to projects and assigned tasks.
+                </DialogDescription>
+              </DialogHeader>
+              {membersDialogWorkspace && (
+                <div className="space-y-4">
+                  <div>
+                    <Label>Add member (search by name or email)</Label>
+                    <div className="flex gap-2 mt-1">
+                      <Input
+                        placeholder="Search users..."
+                        value={memberSearch}
+                        onChange={(e) => setMemberSearch(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleSearchMembers())}
+                      />
+                      <Button onClick={handleSearchMembers} disabled={memberSearch.trim().length < 2}>
+                        Search
+                      </Button>
+                    </div>
+                    {memberError && <p className="text-sm text-destructive mt-1">{memberError}</p>}
+                    {memberSearchResults.length > 0 && (
+                      <div className="mt-2 max-h-40 overflow-y-auto border rounded-md divide-y">
+                        {memberSearchResults
+                          .filter((u) => !workspaceMembers.some((m) => (m.user_id ?? m.id) === u.id))
+                          .map((u) => (
+                            <div key={u.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                              <span>{u.first_name} {u.last_name} ({u.email})</span>
+                              <Button
+                                size="sm"
+                                disabled={isAddingMember}
+                                onClick={() => handleAddWorkspaceMember(u.id)}
+                              >
+                                Add
+                              </Button>
+                            </div>
+                          ))}
+                        {memberSearchResults.filter((u) => !workspaceMembers.some((m) => (m.user_id ?? m.id) === u.id)).length === 0 && (
+                          <p className="px-3 py-2 text-sm text-muted-foreground">All results already in workspace</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <Label>Current members</Label>
+                    <div className="mt-1 max-h-48 overflow-y-auto border rounded-md divide-y">
+                      {workspaceMembers.length === 0 ? (
+                        <p className="px-3 py-4 text-sm text-muted-foreground">No members yet</p>
+                      ) : (
+                        workspaceMembers.map((m) => (
+                          <div key={(m.user_id ?? m.id) ?? m.email} className="flex items-center justify-between px-3 py-2 text-sm">
+                            <span>{m.first_name} {m.last_name} ({m.email})</span>
+                            <span className="text-xs text-muted-foreground capitalize">{m.role || 'member'}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMembersDialogWorkspace(null)}>Close</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -214,25 +355,44 @@ function WorkspacesContent() {
                     </div>
                   </div>
 
-                  <div className="mt-6 flex items-center justify-between">
+                  <div className="mt-6 flex items-center justify-between gap-2">
                     <p className="text-xs text-muted-foreground">
                       Created {new Date(w.created_at).toLocaleDateString()}
                     </p>
-                    <Button
-                      variant="outline"
-                      className="bg-transparent"
-                      onClick={() => {
-                        localStorage.setItem('active_workspace_id', String(w.id));
-                        window.location.href = '/projects';
-                      }}
-                    >
-                      Open
-                    </Button>
+                    <div className="flex gap-2">
+                      {canManage && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="bg-transparent gap-1"
+                          onClick={() => {
+                            setMembersDialogWorkspace(w);
+                            setMemberSearch('');
+                            setMemberSearchResults([]);
+                            setMemberError('');
+                          }}
+                        >
+                          <UsersIcon className="w-4 h-4" />
+                          Add Members
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        className="bg-transparent"
+                        onClick={() => {
+                          localStorage.setItem('active_workspace_id', String(w.id));
+                          window.location.href = '/projects';
+                        }}
+                      >
+                        Open
+                      </Button>
+                    </div>
                   </div>
                 </Card>
               </motion.div>
             ))}
           </motion.div>
+          </>
         )}
       </main>
     </div>

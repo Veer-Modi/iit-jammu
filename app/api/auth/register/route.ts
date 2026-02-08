@@ -62,6 +62,9 @@ export async function POST(req: NextRequest) {
       role: 'admin',
     });
 
+    // Auto-add to General Room
+    await addToGeneralRoom(userId, email);
+
     return NextResponse.json(
       {
         message: 'User registered successfully',
@@ -82,5 +85,36 @@ export async function POST(req: NextRequest) {
       { error: 'Registration failed' },
       { status: 500 }
     );
+  }
+}
+
+async function addToGeneralRoom(userId: number, email: string) {
+  try {
+    // 1. Find General Room
+    const rooms = await query('SELECT id FROM chat_rooms WHERE name = ? LIMIT 1', ['General']);
+    let roomId;
+
+    if (Array.isArray(rooms) && rooms.length > 0) {
+      roomId = (rooms[0] as any).id;
+    } else {
+      // 2. Create General Room if not exists (assigned to Workspace 1 by default or logic)
+      // Assuming workspace_id 1 exists for now, or use first available.
+      // Better: check if we have a workspace logic. For now, let's assume global or specific workspace 1.
+      const result = await query(
+        `INSERT INTO chat_rooms (workspace_id, name, type, description, created_by) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [1, 'General', 'channel', 'General discussion', userId]
+      );
+      roomId = (result as any).insertId;
+    }
+
+    // 3. Add User to Room
+    await query(
+      'INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)',
+      [roomId, userId]
+    );
+  } catch (err) {
+    console.error('Failed to add user to General room:', err);
+    // Don't fail registration if this fails
   }
 }

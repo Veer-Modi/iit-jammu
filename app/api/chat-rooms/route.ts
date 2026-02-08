@@ -24,14 +24,29 @@ export async function GET(req: NextRequest) {
 
     // Fetch all rooms (global access)
     // We can filter by workspace if provided, but default to all relevant rooms
-    let queryStr = `SELECT cr.* FROM chat_rooms cr
-       INNER JOIN chat_room_members crm ON cr.id = crm.room_id
-       WHERE crm.user_id = ? AND cr.is_archived = false
-       ORDER BY cr.created_at DESC`;
+    // Fetch all rooms (global access)
+    // For DMs, we want to know the "other" person's name and avatar.
+    // We achieve this by subquerying the other member.
+    let queryStr = `
+      SELECT cr.*, COALESCE(cn.unread_count, 0) as unread_count, 
+             (SELECT CONCAT(first_name, ' ', last_name) 
+              FROM users u 
+              JOIN chat_room_members crm2 ON u.id = crm2.user_id 
+              WHERE crm2.room_id = cr.id AND u.id != ? LIMIT 1) as dm_name,
+             (SELECT avatar_url 
+              FROM users u 
+              JOIN chat_room_members crm2 ON u.id = crm2.user_id 
+              WHERE crm2.room_id = cr.id AND u.id != ? LIMIT 1) as dm_avatar
+      FROM chat_rooms cr
+      INNER JOIN chat_room_members crm ON cr.id = crm.room_id
+      LEFT JOIN chat_notifications cn ON cr.id = cn.room_id AND cn.user_id = crm.user_id
+      WHERE crm.user_id = ? AND cr.is_archived = false
+      ORDER BY cr.updated_at DESC, cr.created_at DESC`;
 
-    // If we want to strictly bypass workspace, we just ignored workspaceId line.
 
-    const rooms = await query(queryStr, [payload.id]);
+
+    const userId = Number(payload.id);
+    const rooms = await query(queryStr, [userId, userId, userId]);
 
     return NextResponse.json(rooms, { status: 200 });
   } catch (error) {
@@ -65,13 +80,37 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const creatorId = Number(payload.id);
 
+    // Check for existing DM if type is 'direct'
+    if (type === 'direct' && Array.isArray(member_ids) && member_ids.length === 1) {
+      const targetId = Number(member_ids[0]);
+      // Find if there's a room with exactly these 2 members and type 'direct'
+      const existing = await query(
+        `SELECT r.id 
+         FROM chat_rooms r
+         JOIN chat_room_members m1 ON r.id = m1.room_id
+         JOIN chat_room_members m2 ON r.id = m2.room_id
+         WHERE r.type = 'direct' 
+         AND m1.user_id = ? 
+         AND m2.user_id = ?
+         LIMIT 1`,
+        [creatorId, targetId]
+      );
+
+      if (Array.isArray(existing) && existing.length > 0) {
+        return NextResponse.json({
+          message: 'Chat room already exists',
+          roomId: (existing[0] as any).id
+        }, { status: 200 });
+      }
+    }
 
     // Create chat room
     const result = await query(
       `INSERT INTO chat_rooms (workspace_id, name, type, description, created_by) 
        VALUES (?, ?, ?, ?, ?)`,
-      [workspace_id, name, type, description || null, payload.id]
+      [workspace_id, name, type, description || null, creatorId]
     );
 
     const insertResult = result as any;
@@ -80,12 +119,14 @@ export async function POST(req: NextRequest) {
     // Add creator as member
     await query(
       'INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)',
-      [roomId, payload.id]
+      [roomId, creatorId]
     );
 
     // Add other members if provided
     if (Array.isArray(member_ids) && member_ids.length > 0) {
-      for (const memberId of member_ids) {
+      // Filter out creator from member_ids to avoid duplicates
+      const uniqueMembers = new Set(member_ids.filter((id: number) => Number(id) !== creatorId));
+      for (const memberId of uniqueMembers) {
         await query(
           'INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)',
           [roomId, memberId]

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+import { sendSystemMessage } from '@/lib/chat-system';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -92,6 +93,12 @@ export async function POST(req: NextRequest) {
     const insertResult = result as any;
     const projectId = insertResult.insertId;
 
+    // Add owner as project member
+    await query(
+      'INSERT INTO project_members (project_id, user_id, role, added_by) VALUES (?, ?, ?, ?)',
+      [projectId, payload.id, 'owner', payload.id]
+    );
+
     await query(
       `INSERT INTO milestones (project_id, workspace_id, title, description, due_date, status, progress_percentage, created_by)
        VALUES (?, ?, ?, ?, CURDATE(), 'pending', 0, ?)`,
@@ -110,6 +117,11 @@ export async function POST(req: NextRequest) {
        VALUES (?, ?, ?, ?, ?)`,
       [workspace_id, payload.id, 'project_created', 'project', projectId]
     );
+
+    // System Notification (announcement in General)
+    const ownerRows = await query('SELECT first_name, last_name FROM users WHERE id = ?', [payload.id]);
+    const ownerName = Array.isArray(ownerRows) && ownerRows.length > 0 ? `${(ownerRows[0] as any).first_name} ${(ownerRows[0] as any).last_name}` : 'Unknown';
+    await sendSystemMessage(Number(workspace_id), `📢 **New Project Created**\n\n**Project:** ${name}\n**Description:** ${description || 'No description'}\n**Created by:** ${ownerName}`);
 
     return NextResponse.json(
       {

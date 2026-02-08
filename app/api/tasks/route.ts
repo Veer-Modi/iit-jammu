@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+import { sendSystemMessage } from '@/lib/chat-system';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -116,6 +117,19 @@ export async function POST(req: NextRequest) {
        VALUES (?, ?, ?, ?, ?)`,
       [workspace_id, payload.id, 'task_created', 'task', taskId]
     );
+
+    // System Notification (full details announcement)
+    let assigneeName = 'Unassigned';
+    if (assigned_to) {
+      const assigneeRows = await query('SELECT first_name, last_name FROM users WHERE id = ?', [assigned_to]);
+      if (Array.isArray(assigneeRows) && assigneeRows.length > 0) {
+        assigneeName = `${(assigneeRows[0] as any).first_name} ${(assigneeRows[0] as any).last_name}`;
+      }
+    }
+    const projectRows = await query('SELECT name FROM projects WHERE id = ?', [project_id]);
+    const projectName = Array.isArray(projectRows) && projectRows.length > 0 ? (projectRows[0] as any).name : 'Unknown project';
+    const dueStr = due_date ? `\n**Due date:** ${due_date}` : '';
+    await sendSystemMessage(Number(workspace_id), `📋 **New Task Assigned**\n\n**Task:** ${title}\n**Project:** ${projectName}\n**Priority:** ${priority || 'medium'}\n**Assigned to:** ${assigneeName}\n**Status:** ${status || 'todo'}${dueStr}${description ? `\n**Details:** ${description}` : ''}`);
 
     return NextResponse.json(
       {

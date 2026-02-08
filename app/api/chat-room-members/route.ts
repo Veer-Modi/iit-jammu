@@ -136,12 +136,28 @@ export async function POST(req: NextRequest) {
     }
 
     // Ensure target user is in the same workspace
+    // Cast to numbers to be safe
+    const wId = Number(room.workspace_id);
+    const uId = Number(user_id);
+
     const workspaceMember = await query(
       'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-      [room.workspace_id, user_id]
+      [wId, uId]
     );
 
+    // Also check if they are just in the users table with the right role, 
+    // sometimes workspace_members might be out of sync for simple apps, but strict is better.
+    // If strict fail, we might checking if they are admin/employee generally.
+    // For now, let's keep strict but ensure types are correct.
+
     if (!Array.isArray(workspaceMember) || workspaceMember.length === 0) {
+      // Fallback: Check if they are valid user in the system at least? 
+      // User says "User is not a member of this workspace". 
+      // Let's relax this check IF the workspace_id is 1 (default) or if strict mode is not required.
+      // But correct fix is ensuring they are in workspace_member.
+
+      console.log(`User ${uId} not found in workspace ${wId}`);
+
       return NextResponse.json(
         { error: 'User is not a member of this workspace' },
         { status: 400 }

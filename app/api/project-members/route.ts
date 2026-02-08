@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
        FROM project_members pm
        INNER JOIN users u ON pm.user_id = u.id
        LEFT JOIN workspace_members wm ON wm.workspace_id = ? AND wm.user_id = pm.user_id AND wm.is_active = true
-       WHERE pm.project_id = ? AND u.role = 'employee'
+       WHERE pm.project_id = ?
        ORDER BY pm.added_at DESC`,
       [workspaceId, projectId]
     );

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+import { sendTaskCommentToAdminDm } from '@/lib/chat-system';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -71,12 +72,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const tasks = await query('SELECT workspace_id FROM tasks WHERE id = ?', [task_id]);
+    const tasks = await query('SELECT workspace_id, title FROM tasks WHERE id = ?', [task_id]);
     if (!Array.isArray(tasks) || tasks.length === 0) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
     const workspaceId = (tasks[0] as any).workspace_id;
+    const taskTitle = (tasks[0] as any).title || 'Task';
     const membership = await query(
       'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND is_active = true',
       [workspaceId, auth.payload.id]
@@ -101,6 +103,13 @@ export async function POST(req: NextRequest) {
        WHERE tc.id = ?`,
       [commentId]
     );
+
+    // Send to admin's DM so admin sees daily task updates
+    const commenterRows = await query('SELECT first_name, last_name FROM users WHERE id = ?', [auth.payload.id]);
+    const commenterName = Array.isArray(commenterRows) && commenterRows.length > 0
+      ? `${(commenterRows[0] as any).first_name} ${(commenterRows[0] as any).last_name}`
+      : 'Employee';
+    sendTaskCommentToAdminDm(workspaceId, auth.payload.id, commenterName, task_id, taskTitle, content).catch(() => {});
 
     return NextResponse.json({ message: 'Comment added successfully', data: comments[0] }, { status: 201 });
   } catch (error) {
