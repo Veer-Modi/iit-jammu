@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import {
@@ -13,6 +14,8 @@ import {
   MessageCircle,
   CheckCircle2,
   Rocket,
+  Sparkles,
+  DollarSign,
 } from 'lucide-react';
 
 export default function LandingPage() {
@@ -63,8 +66,8 @@ export default function LandingPage() {
                 Sign In
               </Button>
             </Link>
-            <Link href="/auth/register">
-              <Button className="btn-hover-lift">Get Started</Button>
+            <Link href="/auth/trial">
+              <Button className="btn-hover-lift">Book 7-Day Free Trial</Button>
             </Link>
           </motion.div>
         </div>
@@ -91,19 +94,17 @@ export default function LandingPage() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/auth/register">
+            <Link href="/auth/trial">
               <Button size="lg" className="gap-2 btn-hover-lift">
                 <Rocket className="w-5 h-5" />
-                Start Free Trial
+                Book 7-Day Free Trial
               </Button>
             </Link>
-            <Button
-              size="lg"
-              variant="outline"
-              className="gap-2 btn-hover-lift bg-transparent"
-            >
-              Watch Demo
-            </Button>
+            <Link href="/auth/login">
+              <Button size="lg" variant="outline" className="gap-2 btn-hover-lift bg-transparent">
+                Sign In
+              </Button>
+            </Link>
           </div>
         </motion.div>
 
@@ -157,6 +158,13 @@ export default function LandingPage() {
                 'Designed specifically for startup teams who need powerful yet simple project management.',
               color: 'from-orange-500 to-orange-600',
             },
+            {
+              icon: Sparkles,
+              title: 'AI-Powered Insights',
+              description:
+                'Smart task suggestions, daily summaries, and intelligent prioritization powered by AI.',
+              color: 'from-violet-500 to-purple-600',
+            },
           ].map((feature, index) => {
             const Icon = feature.icon;
             return (
@@ -184,6 +192,74 @@ export default function LandingPage() {
           })}
         </motion.div>
 
+        {/* Pricing Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="mb-20"
+        >
+          <h2 className="text-3xl font-bold text-foreground text-center mb-8">
+            Simple, Transparent Pricing
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+            <Card className="p-6 border-2 border-border hover:border-primary/50 transition-colors">
+              <div className="flex items-center gap-2 mb-4">
+                <DollarSign className="w-5 h-5 text-primary" />
+                <h3 className="text-lg font-semibold">7-Day Trial</h3>
+              </div>
+              <p className="text-3xl font-bold text-foreground mb-2">$0</p>
+              <p className="text-sm text-muted-foreground mb-4">Full access for 7 days</p>
+              <ul className="space-y-2 text-sm text-muted-foreground mb-6">
+                <li>✓ Workspaces & Projects</li>
+                <li>✓ Tasks & Kanban</li>
+                <li>✓ Team Chat</li>
+                <li>✓ AI Insights</li>
+              </ul>
+              <Link href="/auth/trial">
+                <Button className="w-full">Book Free Trial</Button>
+              </Link>
+            </Card>
+            <Card className="p-6 border-2 border-primary relative">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-primary text-white text-xs font-medium rounded-full">
+                Popular
+              </div>
+              <div className="flex items-center gap-2 mb-4">
+                <DollarSign className="w-5 h-5 text-primary" />
+                <h3 className="text-lg font-semibold">Starter</h3>
+              </div>
+              <p className="text-3xl font-bold text-foreground mb-2">$19<span className="text-base font-normal text-muted-foreground">/mo</span></p>
+              <p className="text-sm text-muted-foreground mb-4">Up to 10 team members</p>
+              <ul className="space-y-2 text-sm text-muted-foreground mb-6">
+                <li>✓ Everything in Trial</li>
+                <li>✓ 10 team members</li>
+                <li>✓ Email notifications</li>
+                <li>✓ Priority support</li>
+              </ul>
+              <Link href="/auth/trial">
+                <Button className="w-full">Get Started</Button>
+              </Link>
+            </Card>
+            <Card className="p-6 border-2 border-border hover:border-primary/50 transition-colors">
+              <div className="flex items-center gap-2 mb-4">
+                <DollarSign className="w-5 h-5 text-primary" />
+                <h3 className="text-lg font-semibold">Growth</h3>
+              </div>
+              <p className="text-3xl font-bold text-foreground mb-2">$49<span className="text-base font-normal text-muted-foreground">/mo</span></p>
+              <p className="text-sm text-muted-foreground mb-4">Unlimited members</p>
+              <ul className="space-y-2 text-sm text-muted-foreground mb-6">
+                <li>✓ Everything in Starter</li>
+                <li>✓ Unlimited members</li>
+                <li>✓ Advanced analytics</li>
+                <li>✓ Dedicated support</li>
+              </ul>
+              <Link href="/auth/trial">
+                <Button variant="outline" className="w-full">Contact Sales</Button>
+              </Link>
+            </Card>
+          </div>
+        </motion.div>
+
         {/* CTA Section */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -195,11 +271,11 @@ export default function LandingPage() {
             Ready to Transform Your Workflow?
           </h2>
           <p className="text-muted-foreground mb-6 text-lg">
-            Join teams already using TaskFlow to manage their projects beautifully.
+            Join teams using TaskFlow for task management + AI. Start with a 7-day free trial.
           </p>
-          <Link href="/auth/register">
+          <Link href="/auth/trial">
             <Button size="lg" className="gap-2 btn-hover-lift">
-              Start Your Free Trial Today
+              Book 7-Day Free Trial
             </Button>
           </Link>
         </motion.div>

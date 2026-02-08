@@ -22,11 +22,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Find user
-    const users = await query(
-      'SELECT id, email, password_hash, first_name, last_name, role, is_active FROM users WHERE email = ?',
-      [email]
-    );
+    // Find user (trial_ends_at may not exist in older schemas)
+    let users: any[];
+    try {
+      users = await query(
+        'SELECT id, email, password_hash, first_name, last_name, role, is_active, trial_ends_at FROM users WHERE email = ?',
+        [email]
+      ) as any[];
+    } catch {
+      users = await query(
+        'SELECT id, email, password_hash, first_name, last_name, role, is_active FROM users WHERE email = ?',
+        [email]
+      ) as any[];
+    }
 
     if (!Array.isArray(users) || users.length === 0) {
       return NextResponse.json(
@@ -43,6 +51,17 @@ export async function POST(req: NextRequest) {
         { error: 'Account is deactivated' },
         { status: 403 }
       );
+    }
+
+    // Check trial expiry (if trial_ends_at exists and is set)
+    if (user.trial_ends_at) {
+      const endsAt = new Date(user.trial_ends_at);
+      if (endsAt.getTime() < Date.now()) {
+        return NextResponse.json(
+          { error: 'Your 7-day trial has ended. Please upgrade to continue.' },
+          { status: 403 }
+        );
+      }
     }
 
     // Verify password
@@ -76,6 +95,7 @@ export async function POST(req: NextRequest) {
           first_name: user.first_name,
           last_name: user.last_name,
           role: user.role,
+          trial_ends_at: user.trial_ends_at || null,
         },
       },
       { status: 200 }

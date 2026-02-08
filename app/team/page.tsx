@@ -166,8 +166,8 @@ const EmployeeDetailsSheet = ({
                         <div className="flex items-start justify-between mb-2">
                           <p className="font-medium text-sm line-clamp-1">{task.title}</p>
                           <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${task.status === 'completed' ? 'bg-green-100 text-green-700' :
-                              task.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
-                                'bg-gray-100 text-gray-700'
+                            task.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-700'
                             }`}>
                             {task.status.replace('_', ' ')}
                           </span>
@@ -236,7 +236,6 @@ function TeamContent() {
     first_name: '',
     last_name: '',
     designation: '',
-    add_to_workspace: true,
   });
 
   const [selectedMember, setSelectedMember] = useState<WorkspaceMember | null>(null);
@@ -265,16 +264,23 @@ function TeamContent() {
           first_name: createForm.first_name.trim(),
           last_name: createForm.last_name.trim(),
           designation: createForm.designation.trim(),
-          workspace_id:
-            createForm.add_to_workspace && activeWorkspaceId ? Number(activeWorkspaceId) : undefined,
+          workspace_id: activeWorkspaceId ? Number(activeWorkspaceId) : 1,
+          workspace_role: 'member',
         }),
       });
 
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to create employee');
 
-      setCreatedEmployee(payload.employee as CreatedEmployee);
+      // Employee created successfully - close dialog and refresh
       await mutate();
+      setIsCreateOpen(false);
+      setCreateForm({
+        email: '',
+        first_name: '',
+        last_name: '',
+        designation: '',
+      });
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Failed to create employee');
     } finally {
@@ -322,14 +328,12 @@ function TeamContent() {
                   if (!open) {
                     setCreateError('');
                     setCreatedEmployee(null);
-                    setCreateForm((s) => ({
-                      ...s,
+                    setCreateForm({
                       email: '',
                       first_name: '',
                       last_name: '',
                       designation: '',
-                      add_to_workspace: true,
-                    }));
+                    });
                   }
                 }}
               >
@@ -401,49 +405,6 @@ function TeamContent() {
                         required
                       />
                     </div>
-
-                    <div className="flex items-center justify-between gap-3 border border-border rounded-lg px-3 py-2">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">Add to this workspace</p>
-                        <p className="text-xs text-muted-foreground">
-                          Adds the member to the selected workspace immediately.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setCreateForm((s) => ({ ...s, add_to_workspace: !s.add_to_workspace }))}
-                        className={`h-6 w-11 rounded-full transition-smooth relative ${createForm.add_to_workspace ? 'bg-primary' : 'bg-secondary'
-                          }`}
-                        aria-pressed={createForm.add_to_workspace}
-                      >
-                        <span
-                          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${createForm.add_to_workspace ? 'translate-x-5' : 'translate-x-1'
-                            }`}
-                        />
-                      </button>
-                    </div>
-
-                    {createdEmployee && (
-                      <Card className="p-4 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
-                        <p className="text-sm font-semibold text-green-800 dark:text-green-300 mb-2 flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4" />
-                          Member Added Successfully
-                        </p>
-                        <div className="space-y-2">
-                          <div>
-                            <Label>Email</Label>
-                            <Input value={createdEmployee.email} readOnly className="h-8" />
-                          </div>
-                          <div>
-                            <Label>Temporary password</Label>
-                            <Input value={createdEmployee.temporary_password} readOnly className="h-8 font-mono" />
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-3">
-                          Share these credentials securely. They can login and change the password.
-                        </p>
-                      </Card>
-                    )}
 
                     <DialogFooter>
                       <Button

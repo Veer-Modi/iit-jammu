@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+import { sendWorkspaceCreated } from '@/lib/email';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -55,8 +56,9 @@ export async function GET(req: NextRequest) {
 
     const safeWorkspaceId = workspaceId || 0;
     // When workspaceId provided: return only users IN that workspace (for project member dropdown, etc.)
-    const sql = safeWorkspaceId
-      ? `
+    // Simplified: Fetch ALL employees from users table
+    // Left join with workspace_members to get workspace-specific details if they exist
+    const sql = `
       SELECT 
         u.id as user_id,
         u.id,
@@ -64,40 +66,17 @@ export async function GET(req: NextRequest) {
         u.last_name, 
         u.email, 
         u.avatar_url,
-        u.role as global_role,
-        wm.role, 
+        u.role as app_role,
+        COALESCE(wm.role, 'member') as role,
         wm.id as workspace_member_id,
-        wm.job_title, 
-        wm.department, 
+        wm.workspace_id,
+        wm.designation, 
         wm.joined_at,
-        wm.equity,
         wm.is_active,
         (SELECT COUNT(*) FROM tasks t WHERE t.assigned_to = u.id AND t.status = 'completed') as completed_tasks,
         (SELECT COUNT(*) FROM tasks t WHERE t.assigned_to = u.id) as total_tasks
       FROM users u
-      INNER JOIN workspace_members wm ON u.id = wm.user_id AND wm.workspace_id = ? AND wm.is_active = true
-      WHERE u.is_active = true
-      ORDER BY u.first_name ASC
-    `
-      : `
-      SELECT 
-        u.id as user_id,
-        u.id, 
-        u.first_name, 
-        u.last_name, 
-        u.email, 
-        u.avatar_url,
-        u.role as global_role,
-        COALESCE(wm.role, u.role) as role, 
-        wm.job_title, 
-        wm.department, 
-        wm.joined_at,
-        wm.equity,
-        wm.is_active,
-        (SELECT COUNT(*) FROM tasks t WHERE t.assigned_to = u.id AND t.status = 'completed') as completed_tasks,
-        (SELECT COUNT(*) FROM tasks t WHERE t.assigned_to = u.id) as total_tasks
-      FROM users u
-      LEFT JOIN workspace_members wm ON u.id = wm.user_id AND wm.workspace_id = ?
+      LEFT JOIN workspace_members wm ON u.id = wm.user_id AND wm.workspace_id = ? AND wm.is_active = true
       WHERE u.is_active = true AND u.role = 'employee'
       ORDER BY u.first_name ASC
     `;
@@ -148,8 +127,16 @@ export async function POST(req: NextRequest) {
     const validRole = ['admin', 'manager', 'member', 'viewer'].includes(role || '') ? role : 'member';
     await query(
       'INSERT INTO workspace_members (workspace_id, user_id, role, invited_by) VALUES (?, ?, ?, ?)',
-      [workspace_id, user_id, validRole, payload.id]
+      [workspace_id, user_id, validRole || 'member', payload.id]
     );
+
+    // Email the new member
+    const wsRows = await query('SELECT name FROM workspaces WHERE id = ?', [workspace_id]);
+    const userRows = await query('SELECT email, first_name FROM users WHERE id = ?', [user_id]);
+    if (Array.isArray(wsRows) && wsRows.length > 0 && Array.isArray(userRows) && userRows.length > 0) {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      sendWorkspaceCreated((userRows[0] as any).email, (wsRows[0] as any).name, `${baseUrl}/workspaces`).catch(() => { });
+    }
 
     return NextResponse.json({ message: 'Member added to workspace' }, { status: 201 });
   } catch (error) {

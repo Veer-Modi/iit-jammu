@@ -8,6 +8,7 @@ import { DashboardSidebar } from '@/components/dashboard-sidebar';
 import { useAuth } from '@/hooks/use-auth';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Plus, Building2, Loader2, AlertCircle, Users as UsersIcon } from 'lucide-react';
@@ -57,9 +58,13 @@ function WorkspacesContent() {
   const canManage = user?.role === 'admin' || user?.role === 'manager';
   const workspaces = useMemo(() => data || [], [data]);
 
+  const { data: allEmployees } = useSWR('/api/users?role=employee', authFetcher);
+  const employeeList = useMemo(() => allEmployees || [], [allEmployees]);
+
   const [showForm, setShowForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [formData, setFormData] = useState({ name: '', description: '' });
+  const [selectedEmployees, setSelectedEmployees] = useState<number[]>([]);
   const [formError, setFormError] = useState('');
 
   const [membersDialogWorkspace, setMembersDialogWorkspace] = useState<Workspace | null>(null);
@@ -112,6 +117,12 @@ function WorkspacesContent() {
     }
   };
 
+  const toggleEmployee = (empId: number) => {
+    setSelectedEmployees(prev =>
+      prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
+    );
+  };
+
   const handleCreate = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setFormError('');
@@ -128,6 +139,7 @@ function WorkspacesContent() {
         body: JSON.stringify({
           name: formData.name,
           description: formData.description,
+          member_ids: selectedEmployees,
         }),
       });
 
@@ -135,6 +147,7 @@ function WorkspacesContent() {
       if (!res.ok) throw new Error(payload.error || 'Failed to create workspace');
 
       setFormData({ name: '', description: '' });
+      setSelectedEmployees([]);
       setShowForm(false);
       await mutate();
     } catch (err) {
@@ -209,6 +222,31 @@ function WorkspacesContent() {
                     />
                   </div>
 
+                  <div>
+                    <Label>Add Employees to Workspace</Label>
+                    <div className="mt-2 max-h-40 overflow-y-auto border rounded-lg p-3 space-y-2">
+                      {employeeList.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No employees available. <a href="/team" className="text-primary hover:underline">Create employees first</a></p>
+                      ) : (
+                        employeeList.map((emp: any) => (
+                          <div key={emp.id} className="flex items-center gap-2">
+                            <Checkbox
+                              checked={selectedEmployees.includes(emp.id)}
+                              onCheckedChange={() => toggleEmployee(emp.id)}
+                              disabled={isCreating}
+                            />
+                            <label className="text-sm cursor-pointer flex-1" onClick={() => !isCreating && toggleEmployee(emp.id)}>
+                              {emp.first_name} {emp.last_name} ({emp.email})
+                            </label>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {selectedEmployees.length} employee(s) selected. They will receive email notifications.
+                    </p>
+                  </div>
+
                   <div className="flex justify-end gap-3">
                     <Button
                       type="button"
@@ -258,140 +296,140 @@ function WorkspacesContent() {
           </Card>
         ) : (
           <>
-          <Dialog open={!!membersDialogWorkspace} onOpenChange={(open) => !open && setMembersDialogWorkspace(null)}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Workspace Members</DialogTitle>
-                <DialogDescription>
-                  Add members to {membersDialogWorkspace?.name}. Only workspace members can be added to projects and assigned tasks.
-                </DialogDescription>
-              </DialogHeader>
-              {membersDialogWorkspace && (
-                <div className="space-y-4">
-                  <div>
-                    <Label>Add member (search by name or email)</Label>
-                    <div className="flex gap-2 mt-1">
-                      <Input
-                        placeholder="Search users..."
-                        value={memberSearch}
-                        onChange={(e) => setMemberSearch(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleSearchMembers())}
-                      />
-                      <Button onClick={handleSearchMembers} disabled={memberSearch.trim().length < 2}>
-                        Search
-                      </Button>
+            <Dialog open={!!membersDialogWorkspace} onOpenChange={(open) => !open && setMembersDialogWorkspace(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Workspace Members</DialogTitle>
+                  <DialogDescription>
+                    Add members to {membersDialogWorkspace?.name}. Only workspace members can be added to projects and assigned tasks.
+                  </DialogDescription>
+                </DialogHeader>
+                {membersDialogWorkspace && (
+                  <div className="space-y-4">
+                    <div>
+                      <Label>Add member (search by name or email)</Label>
+                      <div className="flex gap-2 mt-1">
+                        <Input
+                          placeholder="Search users..."
+                          value={memberSearch}
+                          onChange={(e) => setMemberSearch(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleSearchMembers())}
+                        />
+                        <Button onClick={handleSearchMembers} disabled={memberSearch.trim().length < 2}>
+                          Search
+                        </Button>
+                      </div>
+                      {memberError && <p className="text-sm text-destructive mt-1">{memberError}</p>}
+                      {memberSearchResults.length > 0 && (
+                        <div className="mt-2 max-h-40 overflow-y-auto border rounded-md divide-y">
+                          {memberSearchResults
+                            .filter((u) => !workspaceMembers.some((m) => (m.user_id ?? m.id) === u.id))
+                            .map((u) => (
+                              <div key={u.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                                <span>{u.first_name} {u.last_name} ({u.email})</span>
+                                <Button
+                                  size="sm"
+                                  disabled={isAddingMember}
+                                  onClick={() => handleAddWorkspaceMember(u.id)}
+                                >
+                                  Add
+                                </Button>
+                              </div>
+                            ))}
+                          {memberSearchResults.filter((u) => !workspaceMembers.some((m) => (m.user_id ?? m.id) === u.id)).length === 0 && (
+                            <p className="px-3 py-2 text-sm text-muted-foreground">All results already in workspace</p>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {memberError && <p className="text-sm text-destructive mt-1">{memberError}</p>}
-                    {memberSearchResults.length > 0 && (
-                      <div className="mt-2 max-h-40 overflow-y-auto border rounded-md divide-y">
-                        {memberSearchResults
-                          .filter((u) => !workspaceMembers.some((m) => (m.user_id ?? m.id) === u.id))
-                          .map((u) => (
-                            <div key={u.id} className="flex items-center justify-between px-3 py-2 text-sm">
-                              <span>{u.first_name} {u.last_name} ({u.email})</span>
-                              <Button
-                                size="sm"
-                                disabled={isAddingMember}
-                                onClick={() => handleAddWorkspaceMember(u.id)}
-                              >
-                                Add
-                              </Button>
+                    <div>
+                      <Label>Current members</Label>
+                      <div className="mt-1 max-h-48 overflow-y-auto border rounded-md divide-y">
+                        {workspaceMembers.length === 0 ? (
+                          <p className="px-3 py-4 text-sm text-muted-foreground">No members yet</p>
+                        ) : (
+                          workspaceMembers.map((m) => (
+                            <div key={(m.user_id ?? m.id) ?? m.email} className="flex items-center justify-between px-3 py-2 text-sm">
+                              <span>{m.first_name} {m.last_name} ({m.email})</span>
+                              <span className="text-xs text-muted-foreground capitalize">{m.role || 'member'}</span>
                             </div>
-                          ))}
-                        {memberSearchResults.filter((u) => !workspaceMembers.some((m) => (m.user_id ?? m.id) === u.id)).length === 0 && (
-                          <p className="px-3 py-2 text-sm text-muted-foreground">All results already in workspace</p>
+                          ))
                         )}
                       </div>
-                    )}
-                  </div>
-                  <div>
-                    <Label>Current members</Label>
-                    <div className="mt-1 max-h-48 overflow-y-auto border rounded-md divide-y">
-                      {workspaceMembers.length === 0 ? (
-                        <p className="px-3 py-4 text-sm text-muted-foreground">No members yet</p>
-                      ) : (
-                        workspaceMembers.map((m) => (
-                          <div key={(m.user_id ?? m.id) ?? m.email} className="flex items-center justify-between px-3 py-2 text-sm">
-                            <span>{m.first_name} {m.last_name} ({m.email})</span>
-                            <span className="text-xs text-muted-foreground capitalize">{m.role || 'member'}</span>
-                          </div>
-                        ))
-                      )}
                     </div>
                   </div>
-                </div>
-              )}
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setMembersDialogWorkspace(null)}>Close</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-          >
-            {workspaces.map((w, idx) => (
-              <motion.div
-                key={w.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: idx * 0.05 }}
-                whileHover={{ y: -4 }}
-              >
-                <Card className="p-6 hover:shadow-lg transition-smooth">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <h3 className="text-lg font-semibold text-foreground truncate">{w.name}</h3>
-                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                        {w.description || 'No description'}
-                      </p>
+                )}
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setMembersDialogWorkspace(null)}>Close</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            >
+              {workspaces.map((w, idx) => (
+                <motion.div
+                  key={w.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: idx * 0.05 }}
+                  whileHover={{ y: -4 }}
+                >
+                  <Card className="p-6 hover:shadow-lg transition-smooth">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <h3 className="text-lg font-semibold text-foreground truncate">{w.name}</h3>
+                        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                          {w.description || 'No description'}
+                        </p>
+                      </div>
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0"
+                        style={{ backgroundColor: (w.color_scheme as string) || '#3B82F6' }}
+                      >
+                        <Building2 className="w-5 h-5" />
+                      </div>
                     </div>
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0"
-                      style={{ backgroundColor: (w.color_scheme as string) || '#3B82F6' }}
-                    >
-                      <Building2 className="w-5 h-5" />
-                    </div>
-                  </div>
 
-                  <div className="mt-6 flex items-center justify-between gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      Created {new Date(w.created_at).toLocaleDateString()}
-                    </p>
-                    <div className="flex gap-2">
-                      {canManage && (
+                    <div className="mt-6 flex items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">
+                        Created {new Date(w.created_at).toLocaleDateString()}
+                      </p>
+                      <div className="flex gap-2">
+                        {canManage && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-transparent gap-1"
+                            onClick={() => {
+                              setMembersDialogWorkspace(w);
+                              setMemberSearch('');
+                              setMemberSearchResults([]);
+                              setMemberError('');
+                            }}
+                          >
+                            <UsersIcon className="w-4 h-4" />
+                            Add Members
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
-                          size="sm"
-                          className="bg-transparent gap-1"
+                          className="bg-transparent"
                           onClick={() => {
-                            setMembersDialogWorkspace(w);
-                            setMemberSearch('');
-                            setMemberSearchResults([]);
-                            setMemberError('');
+                            localStorage.setItem('active_workspace_id', String(w.id));
+                            window.location.href = '/projects';
                           }}
                         >
-                          <UsersIcon className="w-4 h-4" />
-                          Add Members
+                          Open
                         </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        className="bg-transparent"
-                        onClick={() => {
-                          localStorage.setItem('active_workspace_id', String(w.id));
-                          window.location.href = '/projects';
-                        }}
-                      >
-                        Open
-                      </Button>
+                      </div>
                     </div>
-                  </div>
-                </Card>
-              </motion.div>
-            ))}
-          </motion.div>
+                  </Card>
+                </motion.div>
+              ))}
+            </motion.div>
           </>
         )}
       </main>

@@ -161,7 +161,12 @@ function DashboardContent() {
   const router = useRouter();
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
-  // Employee redirect handled by ProtectedRoute wrapper
+  // Employee redirect
+  useEffect(() => {
+    if (user && user.role === 'employee') {
+      router.replace('/tasks');
+    }
+  }, [user, router]);
 
   // Mock workspaces - in production this would come from API
   // Replaced the static setWorkspaceId with dynamic workspace fetching and activeWorkspaceId logic

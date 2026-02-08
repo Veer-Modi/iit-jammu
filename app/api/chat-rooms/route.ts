@@ -73,9 +73,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { workspace_id, name, type, description, member_ids } = body;
 
-    if (!workspace_id || !name || !type) {
+    if (!name || !type) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Missing required fields: name and type' },
         { status: 400 }
       );
     }
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
     const result = await query(
       `INSERT INTO chat_rooms (workspace_id, name, type, description, created_by) 
        VALUES (?, ?, ?, ?, ?)`,
-      [workspace_id, name, type, description || null, creatorId]
+      [type === 'direct' ? null : (workspace_id || null), name, type, description || null, payload.id]
     );
 
     const insertResult = result as any;

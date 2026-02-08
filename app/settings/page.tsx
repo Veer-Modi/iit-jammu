@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/use-auth';
 import { ProtectedRoute } from '@/components/protected-route';
 import { DashboardSidebar } from '@/components/dashboard-sidebar';
@@ -36,6 +36,25 @@ function SettingsContent() {
     bio: '',
   });
 
+  // Fetch full profile on mount (includes phone, bio)
+  useEffect(() => {
+    if (!user) return;
+    const token = sessionStorage.getItem('auth_token');
+    fetch('/api/users/profile', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((profile: { phone?: string; bio?: string; first_name?: string; last_name?: string; email?: string }) => {
+        setFormData((prev) => ({
+          ...prev,
+          first_name: profile.first_name || prev.first_name,
+          last_name: profile.last_name || prev.last_name,
+          email: profile.email || prev.email,
+          phone: (profile as any).phone || '',
+          bio: (profile as any).bio || '',
+        }));
+      })
+      .catch(() => {});
+  }, [user?.id]);
+
   const [passwordForm, setPasswordForm] = useState({
     current_password: '',
     new_password: '',
@@ -51,17 +70,32 @@ function SettingsContent() {
   });
 
   const handleSaveProfile = async () => {
+    if (!user) return;
     setIsLoading(true);
     try {
-      // In production, this would call the API
-      if (user) {
-        updateUser({
-          ...user,
+      const token = sessionStorage.getItem('auth_token');
+      const res = await fetch('/api/users/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
           first_name: formData.first_name,
           last_name: formData.last_name,
-        });
-      }
+          phone: formData.phone || undefined,
+          bio: formData.bio || undefined,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to update');
+      updateUser({
+        ...user,
+        first_name: formData.first_name,
+        last_name: formData.last_name,
+      });
       setIsEditing(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update profile');
     } finally {
       setIsLoading(false);
     }
@@ -72,16 +106,35 @@ function SettingsContent() {
       alert('Passwords do not match');
       return;
     }
+    if (passwordForm.new_password.length < 8) {
+      alert('Password must be at least 8 characters with uppercase, lowercase, and number');
+      return;
+    }
 
     setIsLoading(true);
     try {
-      // In production, this would call the API
+      const token = sessionStorage.getItem('auth_token');
+      const res = await fetch('/api/users/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          current_password: passwordForm.current_password,
+          new_password: passwordForm.new_password,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to update password');
       alert('Password changed successfully');
       setPasswordForm({
         current_password: '',
         new_password: '',
         confirm_password: '',
       });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to change password');
     } finally {
       setIsLoading(false);
     }

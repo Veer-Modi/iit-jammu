@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken, hashPassword } from '@/lib/auth';
 import { sendSystemMessage } from '@/lib/chat-system';
+import { sendEmployeeCredentials } from '@/lib/email';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -131,24 +132,36 @@ export async function POST(req: NextRequest) {
     const userId = insertResult.insertId;
 
     // Add to default workspace (1) if not provided
-    const targetWorkspaceId = workspace_id || 1;
+    let targetWorkspaceId = workspace_id || 1;
 
-    // Check if already member (unlikely for new user but good practice)
+    // Verify workspace exists
+    const wsExists = await query('SELECT id FROM workspaces WHERE id = ?', [targetWorkspaceId]);
+    if (!Array.isArray(wsExists) || wsExists.length === 0) {
+      // Fallback: Create default workspace if ID 1 doesn't exist
+      const newWs = await query('INSERT INTO workspaces (name, description, owner_id) VALUES (?, ?, ?)', ['Default Workspace', 'Auto-created default workspace', payload.id]);
+      targetWorkspaceId = (newWs as any).insertId;
+    }
+
+    // Check if already member
     const existingMember = await query('SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?', [targetWorkspaceId, userId]);
 
     if (!Array.isArray(existingMember) || existingMember.length === 0) {
       await query(
-        `INSERT INTO workspace_members (workspace_id, user_id, role, designation, invited_by) 
-         VALUES (?, ?, ?, ?, ?)`,
-        [targetWorkspaceId, userId, workspace_role || 'member', designation || null, payload.id]
+        `INSERT INTO workspace_members (workspace_id, user_id, role, invited_by) 
+         VALUES (?, ?, ?, ?)`,
+        [targetWorkspaceId, userId, workspace_role || 'member', payload.id]
       );
     }
+
+    // Send credentials via email (Non-blocking)
+    const loginUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/login`;
+    sendEmployeeCredentials(email, first_name, email, tempPassword, loginUrl).catch(err => console.error('Failed to send credentials email:', err));
 
     if (targetWorkspaceId) {
       await query(
         `INSERT INTO activity_logs (workspace_id, user_id, action, entity_type, entity_id) 
          VALUES (?, ?, ?, ?, ?)`,
-        [workspace_id, payload.id, 'employee_created', 'user', userId]
+        [targetWorkspaceId, payload.id, 'employee_created', 'user', userId]
       );
     }
 
@@ -158,7 +171,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Auto-add to General Room
-    await addToGeneralRoom(userId, workspace_id);
+    await addToGeneralRoom(userId, targetWorkspaceId);
+
+    // Email credentials to employee
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    try {
+      console.log(`Sending employee credentials to: ${email}`);
+      await sendEmployeeCredentials(email, first_name, email, tempPassword, `${baseUrl}/auth/login`);
+      console.log(`Employee credentials email sent successfully to: ${email}`);
+    } catch (emailError) {
+      console.error('Failed to send employee credentials email:', emailError);
+    }
 
     return NextResponse.json(
       {

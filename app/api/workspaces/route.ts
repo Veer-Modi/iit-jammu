@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
 import { sendSystemMessage } from '@/lib/chat-system';
+import { sendWorkspaceCreated } from '@/lib/email';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { name, description } = body;
+    const { name, description, member_ids } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -86,6 +87,45 @@ export async function POST(req: NextRequest) {
     const generalRoomId = Array.isArray(generalRoomResult) && generalRoomResult.length > 0 ? (generalRoomResult[0] as any).id : null;
     if (generalRoomId) {
       await query('INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)', [generalRoomId, payload.id]);
+    }
+
+    // Add selected employees to workspace
+    if (Array.isArray(member_ids) && member_ids.length > 0) {
+      const emailPromises = [];
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+      for (const userId of member_ids) {
+        // Add to workspace_members
+        try {
+          await query(
+            'INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)',
+            [workspaceId, userId, 'member']
+          );
+        } catch (e) {
+          console.error(`Failed to add user ${userId} to workspace ${workspaceId}:`, e);
+        }
+
+        // Add to General room
+        if (generalRoomId) {
+          try {
+            await query('INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)', [generalRoomId, userId]);
+          } catch (e) {
+            console.error(`Failed to add user ${userId} to general room:`, e);
+          }
+        }
+
+        // Fetch user email for notification
+        const userRows = await query('SELECT email, first_name FROM users WHERE id = ?', [userId]);
+        if (Array.isArray(userRows) && userRows.length > 0) {
+          const u = userRows[0] as any;
+          // Send email (async)
+          emailPromises.push(
+            sendWorkspaceCreated(u.email, name, `${baseUrl}/workspaces`).catch(e => console.error('Workspace email failed:', e))
+          );
+        }
+      }
+      // Fire and forget emails
+      Promise.all(emailPromises).catch(e => console.error('Workspace email batch failed:', e));
     }
 
     // System Notification (announcement in General)

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
 import { sendSystemMessage } from '@/lib/chat-system';
+import { sendProjectCreated } from '@/lib/email';
 
 const getAuthToken = (req: NextRequest): string | null => {
   const authHeader = req.headers.get('authorization');
@@ -71,19 +72,43 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Verify user is member of workspace
-    const members = await query(
-      'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-      [workspace_id, payload.id]
-    );
-
-    if (!Array.isArray(members) || members.length === 0) {
-      return NextResponse.json(
-        { error: 'Not a member of this workspace' },
-        { status: 403 }
-      );
+    const wsId = Number(workspace_id);
+    if (isNaN(wsId)) {
+      return NextResponse.json({ error: 'Invalid Workspace ID' }, { status: 400 });
     }
 
+    // Verify workspace exists
+    const wsCheck = await query('SELECT id FROM workspaces WHERE id = ?', [wsId]);
+    if (!Array.isArray(wsCheck) || wsCheck.length === 0) {
+      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
+    }
+
+    // Verify user is member of workspace OR owner of workspace OR is Admin
+    console.log(`🔍 [Project Create] Checking auth for User ${payload.id} (Role: ${payload.role}) in Workspace ${workspace_id}`);
+
+    // TRUST ADMINS IMPLICITLY
+    if (payload.role === 'admin' || payload.role === 'manager') {
+      console.log('✅ User is Admin/Manager. Allowing access.');
+    } else {
+      const memberCheck = await query(
+        'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+        [workspace_id, payload.id]
+      );
+
+      // If not a member, check if they are the owner
+      if (!Array.isArray(memberCheck) || memberCheck.length === 0) {
+        const ownerCheck = await query(
+          'SELECT id FROM workspaces WHERE id = ? AND owner_id = ?',
+          [workspace_id, payload.id]
+        );
+        if (!Array.isArray(ownerCheck) || ownerCheck.length === 0) {
+          console.error(`❌ Authorization Failed: User ${payload.id} is NOT member/owner of Workspace ${workspace_id}`);
+          return NextResponse.json({ error: 'Not a member of this workspace' }, { status: 403 });
+        }
+      }
+    }
+
+    // 1. Insert Project into 'projects' table
     const result = await query(
       `INSERT INTO projects (workspace_id, name, description, color, icon, owner_id) 
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -93,35 +118,51 @@ export async function POST(req: NextRequest) {
     const insertResult = result as any;
     const projectId = insertResult.insertId;
 
-    // Add owner as project member
+    // 2. Insert Project Members into 'project_members' table
+    // Add Owner
     await query(
       'INSERT INTO project_members (project_id, user_id, role, added_by) VALUES (?, ?, ?, ?)',
       [projectId, payload.id, 'owner', payload.id]
     );
 
-    await query(
-      `INSERT INTO milestones (project_id, workspace_id, title, description, due_date, status, progress_percentage, created_by)
-       VALUES (?, ?, ?, ?, CURDATE(), 'pending', 0, ?)`,
-      [
-        projectId,
-        workspace_id,
-        `Project Created: ${name}`,
-        'Auto-generated milestone upon project creation',
-        payload.id,
-      ]
-    );
+    // Add Selected Members (if any)
+    const { member_ids } = body; // Get member_ids from request
+    if (Array.isArray(member_ids) && member_ids.length > 0) {
+      for (const memberId of member_ids) {
+        // Prevent duplicate if owner is in list
+        if (Number(memberId) !== Number(payload.id)) {
+          try {
+            await query(
+              'INSERT INTO project_members (project_id, user_id, role, added_by) VALUES (?, ?, ?, ?)',
+              [projectId, memberId, 'member', payload.id]
+            );
+          } catch (err) {
+            console.error(`Failed to add member ${memberId} to project ${projectId}:`, err);
+            // Continue even if one fails
+          }
+        }
+      }
+    }
 
-    // Log activity
-    await query(
+    // Optional: Log activity (Non-blocking)
+    query(
       `INSERT INTO activity_logs (workspace_id, user_id, action, entity_type, entity_id) 
        VALUES (?, ?, ?, ?, ?)`,
       [workspace_id, payload.id, 'project_created', 'project', projectId]
-    );
+    ).catch(console.error);
 
-    // System Notification (announcement in General)
-    const ownerRows = await query('SELECT first_name, last_name FROM users WHERE id = ?', [payload.id]);
-    const ownerName = Array.isArray(ownerRows) && ownerRows.length > 0 ? `${(ownerRows[0] as any).first_name} ${(ownerRows[0] as any).last_name}` : 'Unknown';
-    await sendSystemMessage(Number(workspace_id), `📢 **New Project Created**\n\n**Project:** ${name}\n**Description:** ${description || 'No description'}\n**Created by:** ${ownerName}`);
+    // Optional: Email Notifications (Non-blocking)
+    const wsMembers = await query('SELECT u.email, u.first_name FROM workspace_members wm JOIN users u ON wm.user_id = u.id WHERE wm.workspace_id = ? AND wm.is_active = true', [workspace_id]);
+    const wsRows = await query('SELECT name FROM workspaces WHERE id = ?', [workspace_id]);
+    const wsName = Array.isArray(wsRows) && wsRows.length > 0 ? (wsRows[0] as any).name : 'Workspace';
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+    if (Array.isArray(wsMembers)) {
+      // Send emails in background
+      Promise.all(wsMembers.map(m =>
+        sendProjectCreated((m as any).email, name, wsName, `${baseUrl}/projects`).catch(e => console.error('Email failed:', e))
+      )).catch(e => console.error('Email batch failed:', e));
+    }
 
     return NextResponse.json(
       {

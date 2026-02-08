@@ -54,6 +54,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
+        suppressHydrationWarning
         className={`${poppins.variable} ${jetbrains.variable} font-sans antialiased bg-background text-foreground`}
       >
         {children}

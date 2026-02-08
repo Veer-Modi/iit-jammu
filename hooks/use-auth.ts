@@ -9,6 +9,7 @@ export interface User {
   last_name: string;
   role: 'admin' | 'manager' | 'employee';
   avatar_url?: string;
+  trial_ends_at?: string | null;
 }
 
 export interface AuthContextType {

@@ -8,6 +8,7 @@ import { DashboardSidebar } from '@/components/dashboard-sidebar';
 import { useAuth } from '@/hooks/use-auth';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -140,6 +141,9 @@ function ProjectsContent() {
   const { data: workspaceMembers } = useSWR<WorkspaceMember[]>(membersKey, authFetcher);
   const workspaceMemberList = useMemo(() => workspaceMembers || [], [workspaceMembers]);
 
+  const { data: allEmployees } = useSWR('/api/users?role=employee', authFetcher);
+  const employeeList = useMemo(() => allEmployees || [], [allEmployees]);
+
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedMemberUserId, setSelectedMemberUserId] = useState<string>('unselected');
@@ -158,12 +162,19 @@ function ProjectsContent() {
   const [showForm, setShowForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [formError, setFormError] = useState('');
+  const [selectedProjectEmployees, setSelectedProjectEmployees] = useState<number[]>([]);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     color: '#3B82F6',
     icon: 'folder',
   });
+
+  const toggleProjectEmployee = (empId: number) => {
+    setSelectedProjectEmployees(prev =>
+      prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
+    );
+  };
 
   const handleCreate = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -188,6 +199,7 @@ function ProjectsContent() {
           description: formData.description,
           color: formData.color,
           icon: formData.icon,
+          member_ids: selectedProjectEmployees,
         }),
       });
 
@@ -195,6 +207,7 @@ function ProjectsContent() {
       if (!res.ok) throw new Error(payload.error || 'Failed to create project');
 
       setFormData({ name: '', description: '', color: '#3B82F6', icon: 'folder' });
+      setSelectedProjectEmployees([]);
       setShowForm(false);
       await mutate();
     } catch (err) {
@@ -390,6 +403,41 @@ function ProjectsContent() {
                     />
                   </div>
 
+                  <div>
+                    <Label>Add Employees to Project</Label>
+                    <div className="mt-2 max-h-40 overflow-y-auto border rounded-lg p-3 space-y-2">
+                      {employeeList.length === 0 ? (
+                        <div className="text-center py-4">
+                          <p className="text-sm text-muted-foreground mb-3">No employees available.</p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.location.href = '/team'}
+                          >
+                            Go to Team Page to Add Employees
+                          </Button>
+                        </div>
+                      ) : (
+                        employeeList.map((emp: any) => (
+                          <div key={emp.id} className="flex items-center gap-2">
+                            <Checkbox
+                              checked={selectedProjectEmployees.includes(emp.id)}
+                              onCheckedChange={() => toggleProjectEmployee(emp.id)}
+                              disabled={isCreating}
+                            />
+                            <label className="text-sm cursor-pointer flex-1" onClick={() => !isCreating && toggleProjectEmployee(emp.id)}>
+                              {emp.first_name} {emp.last_name} ({emp.email})
+                            </label>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {selectedProjectEmployees.length} employee(s) selected. They will receive email notifications.
+                    </p>
+                  </div>
+
                   <div className="flex justify-end gap-3">
                     <Button
                       type="button"
@@ -437,36 +485,36 @@ function ProjectsContent() {
             ) : (
               <div className="space-y-4">
                 {canManage && (
-                <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-                  <div className="flex-1 space-y-2">
-                    <Label>Add member</Label>
-                    <Select value={selectedMemberUserId} onValueChange={setSelectedMemberUserId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select workspace member" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="unselected">Select…</SelectItem>
-                        {workspaceMemberList.map((m) => {
-                          const uid = (m as { user_id?: number }).user_id ?? (m as { id?: number }).id;
-                          if (!uid) return null;
-                          return (
-                            <SelectItem key={uid} value={String(uid)}>
-                              {m.first_name} {m.last_name} ({m.email})
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                    <div className="flex-1 space-y-2">
+                      <Label>Add member</Label>
+                      <Select value={selectedMemberUserId} onValueChange={setSelectedMemberUserId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select workspace member" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unselected">Select…</SelectItem>
+                          {workspaceMemberList.map((m) => {
+                            const uid = (m as { user_id?: number }).user_id ?? (m as { id?: number }).id;
+                            if (!uid) return null;
+                            return (
+                              <SelectItem key={uid} value={String(uid)}>
+                                {m.first_name} {m.last_name} ({m.email})
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Button
+                      className="gap-2"
+                      onClick={() => addProjectMember().catch(console.error)}
+                      disabled={isUpdatingMembers || selectedMemberUserId === 'unselected'}
+                    >
+                      {isUpdatingMembers ? <Loader2 className="w-4 h-4 animate-spin" /> : <UsersIcon className="w-4 h-4" />}
+                      Add
+                    </Button>
                   </div>
-                  <Button
-                    className="gap-2"
-                    onClick={() => addProjectMember().catch(console.error)}
-                    disabled={isUpdatingMembers || selectedMemberUserId === 'unselected'}
-                  >
-                    {isUpdatingMembers ? <Loader2 className="w-4 h-4 animate-spin" /> : <UsersIcon className="w-4 h-4" />}
-                    Add
-                  </Button>
-                </div>
                 )}
 
                 {projectMemberList.length === 0 ? (
@@ -594,18 +642,18 @@ function ProjectsContent() {
                       {canManage ? 'Add Members' : 'Members'}
                     </Button>
                     {canManage && (
-                    <Button
-                      className="gap-2"
-                      onClick={() => markProjectCompleted(p.id).catch(console.error)}
-                      disabled={p.status === 'completed' || isMarkingCompleted === p.id}
-                    >
-                      {isMarkingCompleted === p.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="w-4 h-4" />
-                      )}
-                      Complete
-                    </Button>
+                      <Button
+                        className="gap-2"
+                        onClick={() => markProjectCompleted(p.id).catch(console.error)}
+                        disabled={p.status === 'completed' || isMarkingCompleted === p.id}
+                      >
+                        {isMarkingCompleted === p.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4" />
+                        )}
+                        Complete
+                      </Button>
                     )}
                   </div>
                 </Card>

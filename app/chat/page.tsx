@@ -111,7 +111,12 @@ function ChatContent() {
   } = useSWR<ChatRoom[]>(roomsKey, authFetcher);
 
   const roomList = useMemo(() => rooms || [], [rooms]);
-  const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
+  const [selectedRoomId, setSelectedRoomId] = useState<number | string | null>(null);
+
+  // AI State
+  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
+  const [aiMessages, setAiMessages] = useState<Message[]>([]);
+  const [isAiTyping, setIsAiTyping] = useState(false);
 
   useEffect(() => {
     // Auto-select General if nothing selected
@@ -124,7 +129,10 @@ function ChatContent() {
   }, [roomList, selectedRoomId]);
 
   const selectedRoom = useMemo(
-    () => roomList.find((r) => r.id === selectedRoomId) || null,
+    () => {
+      if (selectedRoomId === 'ai') return { id: 'ai', name: 'AI Assistant', type: 'ai' } as any;
+      return roomList.find((r) => r.id === selectedRoomId) || null;
+    },
     [roomList, selectedRoomId]
   );
 
@@ -158,7 +166,7 @@ function ChatContent() {
     };
   }, [socket, selectedRoomId]);
 
-  const messagesKey = selectedRoomId ? `/api/messages?roomId=${selectedRoomId}&limit=100` : null;
+  const messagesKey = selectedRoomId && selectedRoomId !== 'ai' ? `/api/messages?roomId=${selectedRoomId}&limit=100` : null;
   const {
     data: messages,
     error: messagesError,
@@ -166,7 +174,10 @@ function ChatContent() {
     mutate: mutateMessages,
   } = useSWR<Message[]>(messagesKey, authFetcher);
 
-  const messageList = useMemo(() => messages || [], [messages]);
+  const messageList = useMemo(() => {
+    if (selectedRoomId === 'ai') return aiMessages;
+    return messages || [];
+  }, [messages, selectedRoomId, aiMessages]);
   const [messageInput, setMessageInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -460,6 +471,66 @@ function ChatContent() {
 
     if (!messageInput.trim()) return;
     if (!selectedRoomId) return;
+
+    // Handle AI Chat
+    if (selectedRoomId === 'ai') {
+      const userMsg: Message = {
+        id: Date.now(),
+        sender_id: user?.id || 0,
+        content: messageInput,
+        created_at: new Date().toISOString(),
+        first_name: user?.first_name,
+        last_name: user?.last_name,
+        avatar_url: user?.avatar_url,
+        message_type: 'text'
+      };
+
+      setAiMessages(prev => [...prev, userMsg]);
+      setMessageInput('');
+      setIsAiTyping(true);
+
+      try {
+        const token = sessionStorage.getItem('auth_token');
+        const res = await fetch('/api/ai/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            message: userMsg.content,
+            workspace_id: activeWorkspaceId
+          })
+        });
+
+        const data = await res.json();
+
+        const aiMsg: Message = {
+          id: Date.now() + 1,
+          sender_id: -1, // AI ID
+          content: data.response,
+          created_at: new Date().toISOString(),
+          first_name: 'AI',
+          last_name: 'Assistant',
+          avatar_url: '/ai-avatar.png', // You might want to add an actual asset or use an icon
+          message_type: 'text'
+        };
+
+        setAiMessages(prev => [...prev, aiMsg]);
+      } catch (err) {
+        console.error('AI Error:', err);
+        const errorMsg: Message = {
+          id: Date.now() + 1,
+          sender_id: -1,
+          content: 'Sorry, I encountered an error creating a response.',
+          created_at: new Date().toISOString(),
+          first_name: 'AI',
+          last_name: 'Assistant',
+          message_type: 'system'
+        };
+        setAiMessages(prev => [...prev, errorMsg]);
+      } finally {
+        setIsAiTyping(false);
+      }
+      return;
+    }
 
     const token = sessionStorage.getItem('auth_token');
 
@@ -781,6 +852,32 @@ function ChatContent() {
               </h3>
             </div>
 
+            {/* AI Assistant Button */}
+            <div className="px-4 pb-1">
+              <motion.button
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                onClick={() => setSelectedRoomId('ai')}
+                className={`w-full flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors text-left group ${selectedRoomId === 'ai' ? 'bg-primary/10' : ''}`}
+              >
+                <div className="relative">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-xs font-bold text-white shadow-sm">
+                    AI
+                  </div>
+                  <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-card rounded-full"></div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium flex items-center gap-1">
+                    AI Assistant
+                    <span className="text-[10px] bg-purple-100 dark:bg-purple-900 text-purple-600 dark:text-purple-300 px-1.5 rounded-full">BETA</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate w-40">
+                    Always here to help
+                  </div>
+                </div>
+              </motion.button>
+            </div>
+
             {/* Active DMs List */}
             <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-1">
               {filteredRooms.filter(r => r.type === 'direct').map((room) => {
@@ -799,14 +896,18 @@ function ChatContent() {
                       <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary overflow-hidden">
                         {displayAvatar ? <img src={displayAvatar} className="w-full h-full object-cover" /> : displayName[0]}
                       </div>
+                      {/* Online indicator (mock) */}
+                      <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-card rounded-full"></div>
                     </div>
-                    <div className="flex-1 min-w-0 flex items-center justify-between">
-                      <div className="text-sm font-medium truncate group-hover:text-primary transition-colors">{displayName}</div>
-                      {(room as any).unread_count > 0 && (
-                        <span className="bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                          {(room as any).unread_count}
-                        </span>
-                      )}
+                    <div>
+                      <div className="text-sm font-medium">{displayName}</div>
+                      <div className="text-xs text-muted-foreground truncate w-32 group-hover:text-foreground/80 transition-colors">
+                        {(room as any).unread_count > 0 ? (
+                          <span className="text-primary font-bold">{(room as any).unread_count} new messages</span>
+                        ) : (
+                          'Click to chat'
+                        )}
+                      </div>
                     </div>
                   </motion.button>
                 );

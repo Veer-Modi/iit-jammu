@@ -7,10 +7,12 @@ const getAuthToken = (req: NextRequest): string | null => {
   return authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
 };
 
+// PATCH: Update task status/details
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  props: { params: Promise<{ id: string }> }
 ) {
+  const params = await props.params;
   try {
     const token = getAuthToken(req);
     if (!token) {
@@ -60,6 +62,10 @@ export async function PATCH(
       values.push(body.priority);
     }
     if (body.assigned_to !== undefined) {
+      // Logic: Employees cannot reassign tasks to others (except maybe back to unassigned? User implied strict no)
+      if (payload.role === 'employee') {
+        return NextResponse.json({ error: 'Employees cannot reassign tasks.' }, { status: 403 });
+      }
       updates.push('assigned_to = ?');
       values.push(body.assigned_to);
     }

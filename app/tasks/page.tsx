@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import useSWR from 'swr';
+import { useAuth } from '@/hooks/use-auth';
 import { ProtectedRoute } from '@/components/protected-route';
 import { DashboardSidebar } from '@/components/dashboard-sidebar';
 import { Card } from '@/components/ui/card';
@@ -36,9 +37,11 @@ import {
   LayoutList,
   Columns3,
   MessageSquare,
+  ListTodo,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { JSX } from 'react/jsx-runtime'; // Import JSX
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 
 const TaskStatuses = ['todo', 'in_progress', 'in_review', 'completed', 'cancelled'];
 const TaskPriorities = ['low', 'medium', 'high', 'urgent'];
@@ -124,6 +127,7 @@ const authFetcher = async (url: string) => {
 };
 
 function TasksContent() {
+  const { user } = useAuth();
   const { data: workspaces } = useSWR<Workspace[]>('/api/workspaces', authFetcher);
   const workspaceList = useMemo(() => workspaces || [], [workspaces]);
 
@@ -170,6 +174,7 @@ function TasksContent() {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
+    status: 'todo',
     priority: 'medium',
     due_date: '',
     assigned_to: null as number | null,
@@ -196,8 +201,9 @@ function TasksContent() {
   };
 
   const membersKey = activeProjectId ? `/api/project-members?projectId=${activeProjectId}` : null;
-  const { data: projectMembers } = useSWR<ProjectMember[]>(membersKey, authFetcher);
-  const memberList = useMemo(() => projectMembers || [], [projectMembers]);
+  // Fetch all employees for assignment dropdown
+  const { data: allEmployees } = useSWR('/api/users?role=employee', authFetcher);
+  const employeeList = useMemo(() => allEmployees || [], [allEmployees]);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isTaskOpen, setIsTaskOpen] = useState(false);
@@ -237,6 +243,7 @@ function TasksContent() {
           project_id: Number(activeProjectId),
           title: formData.title,
           description: formData.description,
+          status: formData.status,
           priority: formData.priority,
           due_date: formData.due_date || null,
           assigned_to: formData.assigned_to || null,
@@ -246,7 +253,7 @@ function TasksContent() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to create task');
 
-      setFormData({ title: '', description: '', priority: 'medium', due_date: '', assigned_to: null });
+      setFormData({ title: '', description: '', status: 'todo', priority: 'medium', due_date: '', assigned_to: null });
       setShowForm(false);
       await mutate();
     } finally {
@@ -343,6 +350,15 @@ function TasksContent() {
     }
     return map;
   }, [filteredTasks]);
+
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+    const { source, destination, draggableId } = result;
+
+    if (source.droppableId !== destination.droppableId) {
+      handleStatusChange(Number(draggableId), destination.droppableId).catch(console.error);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -498,9 +514,7 @@ function TasksContent() {
                       id="description"
                       placeholder="Enter task description"
                       value={formData.description}
-                      onChange={(e) =>
-                        setFormData({ ...formData, description: e.target.value })
-                      }
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                       disabled={isLoading}
                       rows={3}
                       className="w-full px-3 py-2 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary bg-background text-foreground transition-smooth"
@@ -508,6 +522,26 @@ function TasksContent() {
                   </div>
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <Label htmlFor="status">Status</Label>
+                      <Select
+                        value={formData.status}
+                        onValueChange={(value) =>
+                          setFormData({ ...formData, status: value })
+                        }
+                      >
+                        <SelectTrigger id="status">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TaskStatuses.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {s.charAt(0).toUpperCase() + s.slice(1).replace('_', ' ')}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div>
                       <Label htmlFor="priority">Priority</Label>
                       <Select
@@ -554,8 +588,8 @@ function TasksContent() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="unassigned">Unassigned</SelectItem>
-                          {memberList.map((m) => (
-                            <SelectItem key={m.id} value={String(m.user_id)}>
+                          {employeeList.map((m: any) => (
+                            <SelectItem key={m.id} value={String(m.id)}>
                               {m.first_name} {m.last_name}
                             </SelectItem>
                           ))}
@@ -783,77 +817,81 @@ function TasksContent() {
             </p>
           </Card>
         ) : (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="grid grid-cols-1 lg:grid-cols-5 gap-4"
-          >
-            {TaskStatuses.map((status) => (
-              <Card
-                key={status}
-                className="p-3 min-h-[320px]"
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'move';
-                }}
-                onDrop={(e) => {
-                  const taskId = e.dataTransfer.getData('text/task-id');
-                  if (!taskId) return;
-                  handleStatusChange(Number(taskId), status).catch(console.error);
-                }}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm font-semibold text-foreground capitalize">
-                    {status.replace('_', ' ')}
-                  </p>
-                  <span className="text-xs text-muted-foreground">
-                    {tasksByStatus[status]?.length || 0}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {(tasksByStatus[status] || []).map((task) => (
+          <DragDropContext onDragEnd={onDragEnd}>
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="grid grid-cols-1 lg:grid-cols-5 gap-4"
+            >
+              {TaskStatuses.map((status) => (
+                <Droppable key={status} droppableId={status}>
+                  {(provided) => (
                     <Card
-                      key={task.id}
-                      className="p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-smooth"
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/task-id', String(task.id));
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onClick={() => openTask(task)}
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className="p-3 min-h-[320px] bg-muted/30"
                     >
-                      <p className="text-sm font-semibold text-foreground line-clamp-2">
-                        {task.title}
-                      </p>
-                      {task.description && (
-                        <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
-                          {task.description}
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-semibold text-foreground capitalize">
+                          {status.replace('_', ' ')}
                         </p>
-                      )}
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        <span
-                          className={`inline-flex items-center px-2 py-1 rounded-md text-[11px] font-medium ${priorityColors[task.priority]
-                            }`}
-                        >
-                          {task.priority}
+                        <span className="text-xs text-muted-foreground">
+                          {tasksByStatus[status]?.length || 0}
                         </span>
+                      </div>
 
-                        {assigneeForTask(task) && (
-                          <span className="inline-flex items-center gap-2 ml-auto">
-                            <span className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold">
-                              {assigneeForTask(task)?.initials}
-                            </span>
-                          </span>
-                        )}
+                      <div className="space-y-2 min-h-[200px]">
+                        {(tasksByStatus[status] || []).map((task, index) => (
+                          <Draggable
+                            key={task.id}
+                            draggableId={String(task.id)}
+                            index={index}
+                          >
+                            {(provided) => (
+                              <Card
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                {...provided.dragHandleProps}
+                                className="p-3 hover:shadow-md transition-smooth cursor-grab active:cursor-grabbing bg-card"
+                                onClick={() => openTask(task)}
+                              >
+                                <p className="text-sm font-semibold text-foreground line-clamp-2">
+                                  {task.title}
+                                </p>
+                                {task.description && (
+                                  <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
+                                    {task.description}
+                                  </p>
+                                )}
+                                <div className="flex flex-wrap gap-2 mt-3">
+                                  <span
+                                    className={`inline-flex items-center px-2 py-1 rounded-md text-[11px] font-medium ${priorityColors[task.priority]
+                                      }`}
+                                  >
+                                    {task.priority}
+                                  </span>
+
+                                  {assigneeForTask(task) && (
+                                    <span className="inline-flex items-center gap-2 ml-auto">
+                                      <span className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold">
+                                        {assigneeForTask(task)?.initials}
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
+                              </Card>
+                            )}
+                          </Draggable>
+                        ))}
+                        {provided.placeholder}
                       </div>
                     </Card>
-                  ))}
-                </div>
-              </Card>
-            ))}
-          </motion.div>
+                  )}
+                </Droppable>
+              ))}
+            </motion.div>
+          </DragDropContext>
         )}
 
         {/* Task details */}
@@ -970,8 +1008,8 @@ function TasksContent() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="unassigned">Unassigned</SelectItem>
-                        {memberList.map((m) => (
-                          <SelectItem key={m.user_id} value={String(m.user_id)}>
+                        {employeeList.map((m: any) => (
+                          <SelectItem key={m.id} value={String(m.id)}>
                             {m.first_name} {m.last_name}
                           </SelectItem>
                         ))}
@@ -1052,8 +1090,8 @@ function TasksContent() {
                                 </span>
                               </div>
                               <div className={`p-3 rounded-lg ${comment.content.includes('Daily Commit')
-                                  ? 'bg-primary/5 border border-primary/20'
-                                  : 'bg-secondary'
+                                ? 'bg-primary/5 border border-primary/20'
+                                : 'bg-secondary'
                                 }`}>
                                 <p className="text-foreground whitespace-pre-wrap">{comment.content}</p>
                               </div>

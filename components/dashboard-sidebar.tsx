@@ -40,7 +40,7 @@ const navigationItems = [
     label: 'Dashboard',
     href: '/dashboard',
     icon: LayoutDashboard,
-    roles: ['admin', 'manager', 'employee'],
+    roles: ['admin', 'manager'],
   },
   {
     label: 'Tasks',
@@ -161,6 +161,22 @@ export function DashboardSidebar() {
         className={`fixed left-0 top-0 h-screen w-64 bg-card border-r border-border p-6 flex flex-col z-40 transition-transform duration-300 ${isDesktop || isOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
       >
+        {/* Trial Banner */}
+        {user?.trial_ends_at && (
+          <div className="mb-4 p-3 rounded-lg bg-primary/10 border border-primary/20">
+            <p className="text-xs font-medium text-primary">
+              7-Day Trial
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {(() => {
+                const end = new Date(user.trial_ends_at);
+                const days = Math.ceil((end.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+                return days > 0 ? `${days} days left` : 'Expired';
+              })()}
+            </p>
+          </div>
+        )}
+
         {/* Logo */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}

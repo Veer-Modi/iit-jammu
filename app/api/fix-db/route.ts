@@ -42,6 +42,36 @@ export async function GET() {
             );
         }
 
+        // 4. Trial support - add columns if missing, create trial_requests table
+        try {
+            await query('ALTER TABLE users ADD COLUMN trial_ends_at TIMESTAMP NULL');
+        } catch (e: any) {
+            if (!e?.message?.includes('Duplicate column')) {}
+        }
+        try {
+            await query('ALTER TABLE users ADD COLUMN is_trial_approved BOOLEAN DEFAULT FALSE');
+        } catch (e: any) {
+            if (!e?.message?.includes('Duplicate column')) {}
+        }
+        try {
+            await query(`
+                CREATE TABLE IF NOT EXISTS trial_requests (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    email VARCHAR(255) NOT NULL,
+                    first_name VARCHAR(100) NOT NULL,
+                    last_name VARCHAR(100) NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    company_name VARCHAR(255),
+                    status ENUM('pending','approved','rejected') DEFAULT 'pending',
+                    approved_by INT NULL,
+                    approved_at TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_email (email),
+                    INDEX idx_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            `);
+        } catch (e) {}
+
         return NextResponse.json({ success: true, message: 'DB fixed' });
     } catch (error) {
         console.error('Fix DB error:', error);
