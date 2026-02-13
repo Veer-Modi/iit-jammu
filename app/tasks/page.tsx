@@ -978,44 +978,46 @@ function TasksContent() {
                     </div>
                   </div>
 
-                  <div className="mt-4">
-                    <Label>Assignee</Label>
-                    <Select
-                      value={
-                        selectedTask.assigned_to !== undefined && selectedTask.assigned_to !== null
-                          ? String(selectedTask.assigned_to)
-                          : 'unassigned'
-                      }
-                      onValueChange={(value) => {
-                        const nextAssignee =
-                          value === 'unassigned' ? null : Number.parseInt(value, 10);
+                  {user?.role !== 'employee' && (
+                    <div className="mt-4">
+                      <Label>Assignee</Label>
+                      <Select
+                        value={
+                          selectedTask.assigned_to !== undefined && selectedTask.assigned_to !== null
+                            ? String(selectedTask.assigned_to)
+                            : 'unassigned'
+                        }
+                        onValueChange={(value) => {
+                          const nextAssignee =
+                            value === 'unassigned' ? null : Number.parseInt(value, 10);
 
-                        setIsUpdatingAssignee(true);
-                        handleAssigneeChange(selectedTask.id, nextAssignee)
-                          .then(async () => {
-                            setSelectedTask((t) =>
-                              t ? { ...t, assigned_to: nextAssignee ?? undefined } : t
-                            );
-                            await mutate();
-                          })
-                          .catch(console.error)
-                          .finally(() => setIsUpdatingAssignee(false));
-                      }}
-                      disabled={isUpdatingAssignee}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select assignee" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="unassigned">Unassigned</SelectItem>
-                        {employeeList.map((m: any) => (
-                          <SelectItem key={m.id} value={String(m.id)}>
-                            {m.first_name} {m.last_name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                          setIsUpdatingAssignee(true);
+                          handleAssigneeChange(selectedTask.id, nextAssignee)
+                            .then(async () => {
+                              setSelectedTask((t) =>
+                                t ? { ...t, assigned_to: nextAssignee ?? undefined } : t
+                              );
+                              await mutate();
+                            })
+                            .catch(console.error)
+                            .finally(() => setIsUpdatingAssignee(false));
+                        }}
+                        disabled={isUpdatingAssignee}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select assignee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unassigned">Unassigned</SelectItem>
+                          {employeeList.map((m: any) => (
+                            <SelectItem key={m.id} value={String(m.id)}>
+                              {m.first_name} {m.last_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
 
                   {selectedTask.description && (
                     <div className="mt-4">

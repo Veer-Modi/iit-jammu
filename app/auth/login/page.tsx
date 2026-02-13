@@ -141,34 +141,7 @@ export default function LoginPage() {
               </motion.div>
             </form>
 
-            {/* Divider */}
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-border"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-card text-muted-foreground">
-                  New to TaskFlow?
-                </span>
-              </div>
-            </div>
 
-            {/* Sign Up Link */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5 }}
-            >
-              <p className="text-center text-sm text-muted-foreground">
-                Don't have an account?{' '}
-                <Link
-                  href="/auth/register"
-                  className="font-semibold text-primary hover:text-primary/80 transition-colors"
-                >
-                  Create one here
-                </Link>
-              </p>
-            </motion.div>
           </div>
         </Card>
 

@@ -62,6 +62,7 @@ type AnalyticsPayload = {
     progress_percentage: number;
     project_name?: string;
   }>;
+  completed_projects?: Array<{ name: string; description: string; status: string }>;
 };
 
 const authFetcher = async (url: string) => {
@@ -190,6 +191,78 @@ function AnalyticsContent() {
     ];
   }, [analytics]);
 
+  // Pitch Deck Generation
+  const [isGeneratingDeck, setIsGeneratingDeck] = useState(false);
+
+  const handleGeneratePitchDeck = async () => {
+    setIsGeneratingDeck(true);
+    try {
+      // 1. Get AI Content
+      const res = await fetch('/api/ai/pitch-deck', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionStorage.getItem('auth_token')}`,
+        },
+        body: JSON.stringify({
+          workspaceName: workspaceList.find(w => String(w.id) === activeWorkspaceId)?.name || 'My Startup',
+          milestones: analytics?.completed_projects || [],
+        }),
+      });
+
+      if (!res.ok) throw new Error('Failed to generate content');
+      const data = await res.json();
+
+      // 2. Generate PDF (Lazy load jspdf)
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF();
+
+      // Styling
+      const primaryColor = '#3B82F6';
+
+      // Title
+      doc.setFontSize(24);
+      doc.setTextColor(primaryColor);
+      doc.text('Startup Pitch Deck', 20, 20);
+
+      doc.setFontSize(14);
+      doc.setTextColor('#666666');
+      doc.text(`Generatd for: ${workspaceList.find(w => String(w.id) === activeWorkspaceId)?.name}`, 20, 30);
+      doc.text(`Date: ${new Date().toLocaleDateString()}`, 20, 38);
+
+      let yPos = 50;
+      const addSection = (title: string, body: string) => {
+        if (yPos > 250) { doc.addPage(); yPos = 20; }
+
+        doc.setFontSize(16);
+        doc.setTextColor(primaryColor);
+        doc.text(title.toUpperCase(), 20, yPos);
+        yPos += 10;
+
+        doc.setFontSize(12);
+        doc.setTextColor('#000000');
+        const splitText = doc.splitTextToSize(body, 170);
+        doc.text(splitText, 20, yPos);
+        yPos += (splitText.length * 7) + 15;
+      };
+
+      addSection('The Problem', data.problem || 'N/A');
+      addSection('The Solution', data.solution || 'N/A');
+      addSection('Market Opportunity', data.market || 'N/A');
+      addSection('Traction & Milestones', data.traction || 'N/A');
+      addSection('Team', data.team || 'N/A');
+
+      // Save
+      doc.save('pitch-deck.pdf');
+
+    } catch (err) {
+      console.error(err);
+      alert('Failed to generate pitch deck. Please try again.');
+    } finally {
+      setIsGeneratingDeck(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <DashboardSidebar />
@@ -199,14 +272,29 @@ function AnalyticsContent() {
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
+          className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4"
         >
-          <h1 className="text-4xl font-bold text-foreground mb-2">
-            Analytics
-          </h1>
-          <p className="text-muted-foreground">
-            Track your team's performance and project progress
-          </p>
+          <div>
+            <h1 className="text-4xl font-bold text-foreground mb-2">
+              Analytics
+            </h1>
+            <p className="text-muted-foreground">
+              Track your team's performance and project progress
+            </p>
+          </div>
+          <button
+            onClick={handleGeneratePitchDeck}
+            disabled={isGeneratingDeck}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 font-medium shadow-lg"
+          >
+            {isGeneratingDeck ? (
+              <>Generating...</>
+            ) : (
+              <>
+                <span>✨ Generate Pitch Deck PDF</span>
+              </>
+            )}
+          </button>
         </motion.div>
 
         <div className="flex flex-col sm:flex-row gap-3 sm:items-center mb-6">

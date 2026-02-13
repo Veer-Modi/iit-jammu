@@ -135,22 +135,32 @@ export async function GET(req: NextRequest) {
 
     if (type === 'milestones' || type === 'all') {
       // Milestone Achievement
+      // Milestone Achievement - NOW MAPPED TO PROJECTS
       const milestones = await query(
         `SELECT 
-          m.id,
-          m.title,
-          m.due_date,
-          m.status,
-          m.progress_percentage,
+          p.id,
+          p.name as title,
+          p.created_at as due_date,
+          p.status,
+          CASE 
+            WHEN p.status = 'completed' THEN 100 
+            ELSE (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'completed') * 100.0 / NULLIF((SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id), 1)
+          END as progress_percentage,
           p.name as project_name
-        FROM milestones m
-        LEFT JOIN projects p ON m.project_id = p.id
-        WHERE m.workspace_id = ?
-        ORDER BY m.due_date DESC`,
+        FROM projects p
+        WHERE p.workspace_id = ?
+        ORDER BY p.created_at DESC`,
         [workspaceIdNum]
       );
 
       analytics.milestones = milestones;
+
+      // Completed Projects for Pitch Deck
+      const completedProjects = await query(
+        `SELECT name, description, status FROM projects WHERE workspace_id = ? AND status = 'completed'`,
+        [workspaceIdNum]
+      );
+      analytics.completed_projects = completedProjects;
     }
 
     return NextResponse.json(analytics, { status: 200 });

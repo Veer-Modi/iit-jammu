@@ -1157,6 +1157,9 @@ function ChatContent() {
                       messageList.map((msg, index) => {
                         // Your messages = right, others' messages = left (compare as numbers for robustness)
                         const currentUserId = user?.id != null ? Number(user.id) : null;
+
+
+
                         const senderId = msg.sender_id != null ? Number(msg.sender_id) : null;
                         const isSystemMessage = msg.message_type === 'system';
                         const isMine = !isSystemMessage && currentUserId !== null && senderId !== null && senderId === currentUserId;

@@ -84,15 +84,17 @@ const authFetcher = async (url: string) => {
 
 const EmployeeDetailsSheet = ({
   member,
+  workspaceId,
   isOpen,
   onClose
 }: {
   member: WorkspaceMember | null,
+  workspaceId: string,
   isOpen: boolean,
   onClose: () => void
 }) => {
   const { data: tasks, isLoading } = useSWR<TaskDetail[]>(
-    member && isOpen ? `/api/tasks?assigned_to=${member.user_id}` : null,
+    member && isOpen && workspaceId ? `/api/tasks?assigned_to=${member.user_id}&workspaceId=${workspaceId}` : null,
     authFetcher
   );
 
@@ -521,6 +523,7 @@ function TeamContent() {
 
         <EmployeeDetailsSheet
           member={selectedMember}
+          workspaceId={activeWorkspaceId}
           isOpen={!!selectedMember}
           onClose={() => setSelectedMember(null)}
         />

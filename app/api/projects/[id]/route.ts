@@ -26,12 +26,13 @@ async function requireWorkspaceRole(workspaceId: number, userId: number) {
   return (rows[0] as any).role as string;
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuth(req);
     if ('error' in auth) return auth.error;
 
-    const projectId = Number(params.id);
+    const { id } = await params;
+    const projectId = Number(id);
     if (Number.isNaN(projectId)) {
       return NextResponse.json({ error: 'Invalid project id' }, { status: 400 });
     }

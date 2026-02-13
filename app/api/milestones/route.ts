@@ -23,9 +23,19 @@ export async function GET(req: NextRequest) {
     }
 
     const milestones = await query(
-      `SELECT * FROM milestones 
-       WHERE workspace_id = ? 
-       ORDER BY due_date ASC`,
+      `SELECT 
+        p.id,
+        p.name as title,
+        p.description,
+        p.created_at as due_date,
+        p.status,
+        CASE 
+          WHEN p.status = 'completed' THEN 100 
+          ELSE (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'completed') * 100.0 / NULLIF((SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id), 0)
+        END as progress_percentage
+       FROM projects p 
+       WHERE p.workspace_id = ? 
+       ORDER BY p.created_at DESC`,
       [workspaceId]
     );
 

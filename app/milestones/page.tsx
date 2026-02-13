@@ -207,80 +207,7 @@ function MilestonesContent() {
               </SelectContent>
             </Select>
 
-            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-              <DialogTrigger asChild>
-                <Button className="gap-2" disabled={!activeWorkspaceId || !activeProjectId}>
-                  <Plus className="w-4 h-4" />
-                  New Milestone
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create milestone</DialogTitle>
-                  <DialogDescription>Create a milestone for the selected project.</DialogDescription>
-                </DialogHeader>
 
-                <form onSubmit={handleCreate} className="space-y-4">
-                  {formError && (
-                    <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 mt-0.5" />
-                      <span>{formError}</span>
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    <Label htmlFor="ms_title">Title</Label>
-                    <Input id="ms_title" value={formData.title} onChange={(e) => setFormData((s) => ({ ...s, title: e.target.value }))} required disabled={isCreating} />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="ms_desc">Description</Label>
-                    <textarea id="ms_desc" value={formData.description} onChange={(e) => setFormData((s) => ({ ...s, description: e.target.value }))} rows={3} disabled={isCreating} className="w-full px-3 py-2 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary bg-background text-foreground transition-smooth" />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="ms_due">Due date</Label>
-                      <Input id="ms_due" type="date" value={formData.due_date} onChange={(e) => setFormData((s) => ({ ...s, due_date: e.target.value }))} required disabled={isCreating} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Status</Label>
-                      <Select value={formData.status} onValueChange={(v) => setFormData((s) => ({ ...s, status: v as any }))}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="pending">pending</SelectItem>
-                          <SelectItem value="in_progress">in_progress</SelectItem>
-                          <SelectItem value="completed">completed</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="ms_prog">Progress %</Label>
-                    <Input id="ms_prog" type="number" min={0} max={100} value={formData.progress_percentage} onChange={(e) => setFormData((s) => ({ ...s, progress_percentage: Number(e.target.value) }))} disabled={isCreating} />
-                  </div>
-
-                  <DialogFooter>
-                    <Button type="button" variant="outline" className="bg-transparent" onClick={() => setIsCreateOpen(false)} disabled={isCreating}>
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={isCreating} className="gap-2">
-                      {isCreating ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Creating...
-                        </>
-                      ) : (
-                        'Create'
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
           </div>
         </motion.div>
 
@@ -308,7 +235,6 @@ function MilestonesContent() {
                   <TableHead>Due</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Progress</TableHead>
-                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -320,39 +246,18 @@ function MilestonesContent() {
                     </TableCell>
                     <TableCell>{new Date(m.due_date).toLocaleDateString()}</TableCell>
                     <TableCell>
-                      <Select value={m.status} onValueChange={(v) => handleUpdate(m.id, { status: v as any }).catch(console.error)}>
-                        <SelectTrigger className="w-40">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="pending">pending</SelectItem>
-                          <SelectItem value="in_progress">in_progress</SelectItem>
-                          <SelectItem value="completed">completed</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${m.status === 'completed' ? 'bg-green-100 text-green-700' :
+                        m.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                        {m.status.replace('_', ' ')}
+                      </span>
                     </TableCell>
                     <TableCell>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        defaultValue={m.progress_percentage}
-                        onBlur={(e) => {
-                          const value = Number(e.target.value);
-                          handleUpdate(m.id, { progress_percentage: value }).catch(console.error);
-                        }}
-                        className="w-28"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => handleDelete(m.id).catch(console.error)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 w-28">
+                        <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${Math.round(m.progress_percentage || 0)}%` }}></div>
+                      </div>
+                      <span className="text-xs text-muted-foreground mt-1 block">{Math.round(m.progress_percentage || 0)}%</span>
                     </TableCell>
                   </TableRow>
                 ))}
